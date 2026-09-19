@@ -22,47 +22,70 @@ except ImportError:
     _HAS_WINDOWS_TOASTS = False
 
 
-def make_icon():
+def make_icon(unlocked: bool = False, badge: bool = False):
+    """
+    Vykreslí ikonu zámku:
+    - Zamknuté: fialové telo + zatvorené očko
+    - Odomknuté: jantárovo-zlaté telo + otvorené vyvýšené očko
+    """
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle([10, 30, 54, 58], radius=8, fill="#7c3aed")
-    d.arc([18, 8, 46, 36], start=200, end=340, fill="#c4b5fd", width=7)
+
+    body_color = "#d97706" if unlocked else "#7c3aed"
+    shackle_color = "#fde68a" if unlocked else "#c4b5fd"
+
+    if unlocked:
+        # Otvorené očko (posunuté nahor a pootvorené)
+        d.arc([14, 4, 42, 32], start=180, end=350, fill=shackle_color, width=7)
+    else:
+        # Zatvorené očko
+        d.arc([18, 8, 46, 36], start=200, end=340, fill=shackle_color, width=7)
+
+    # Telo zámku
+    d.rounded_rectangle([10, 30, 54, 58], radius=8, fill=body_color)
+    # Kľúčová dierka
     d.ellipse([27, 38, 37, 48], fill="#e2e8f0")
     d.rectangle([30, 45, 34, 53], fill="#e2e8f0")
+
+    # Notifikačná bodka (napr. pri dostupnej aktualizácii)
+    if badge:
+        d.ellipse([42, 2, 62, 22], fill="#ef4444", outline="#1a0f2e", width=3)
+
     return img
 
-import ctypes
-from ctypes import wintypes
-
-WM_USER         = 0x0400
-TRAY_MSG        = WM_USER + 20
-NIM_ADD         = 0x00000000
-NIM_MODIFY      = 0x00000001
-NIM_DELETE      = 0x00000002
-NIF_MESSAGE     = 0x00000001
-NIF_ICON        = 0x00000002
-NIF_TIP         = 0x00000004
-NIF_INFO        = 0x00000010
-NIIF_INFO       = 0x00000001
-NIIF_USER       = 0x00000004
-NIIF_LARGE_ICON = 0x00000020
-WM_LBUTTONUP    = 0x0202
-WM_RBUTTONUP    = 0x0205
-WM_DESTROY      = 0x0002
+WM_USER              = 0x0400
+TRAY_MSG             = WM_USER + 20
+NIM_ADD              = 0x00000000
+NIM_MODIFY           = 0x00000001
+NIM_DELETE           = 0x00000002
+NIF_MESSAGE          = 0x00000001
+NIF_ICON             = 0x00000002
+NIF_TIP              = 0x00000004
+NIF_INFO             = 0x00000010
+NIIF_INFO            = 0x00000001
+NIIF_USER            = 0x00000004
+NIIF_LARGE_ICON      = 0x00000020
+WM_LBUTTONUP         = 0x0202
+WM_RBUTTONUP         = 0x0205
+WM_DESTROY           = 0x0002
 NIN_BALLOONUSERCLICK = 0x0400 + 5   # WM_USER + 5
-IDM_CONTROL_PANEL = 1001
-IDM_QUIT        = 1002
-MF_STRING       = 0x00000000
-MF_SEPARATOR    = 0x00000800
-TPM_LEFTALIGN   = 0x0000
-TPM_RETURNCMD   = 0x0100
+
+IDM_CONTROL_PANEL    = 1001
+IDM_QUIT             = 1002
+IDM_GLOBAL_UNLOCK    = 1003
+IDM_GLOBAL_LOCK      = 1004
+
+MF_STRING            = 0x00000000
+MF_GRAYED            = 0x00000001
+MF_SEPARATOR         = 0x00000800
+TPM_LEFTALIGN        = 0x0000
+TPM_RETURNCMD        = 0x0100
 
 Shell_NotifyIcon = ctypes.windll.shell32.Shell_NotifyIconW
 
 _AUMID = "MuntasirRahman.DeskWarden.SecurityApp"
 
 def _register_app_user_model_id():
-    
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(_AUMID)
     except Exception as e:
@@ -70,7 +93,6 @@ def _register_app_user_model_id():
 
 
 def _ensure_aumid_registered_in_registry():
-    
     try:
         import winreg
         ico_path = os.path.join(os.path.dirname(asset_path("icon.png")),
@@ -128,7 +150,6 @@ def _pil_to_hicon(img, size=32):
 _custom_balloon_hicon = None  
 
 def _get_balloon_hicon():
-    
     global _custom_balloon_hicon
     if _custom_balloon_hicon is not None:
         return _custom_balloon_hicon
@@ -146,15 +167,19 @@ def _get_balloon_hicon():
     return _custom_balloon_hicon
 
 class NativeTray:
-    def __init__(self, on_control_panel, on_quit):
+    def __init__(self, on_control_panel, on_quit, on_global_unlock=None, on_global_lock=None):
         self._on_control_panel = on_control_panel
-        self._on_quit      = on_quit
-        self._hwnd         = None
-        self._hicon        = None
-        self._alive        = threading.Event()
-        self._thread       = threading.Thread(target=self._run, daemon=False, name="TrayThread")
-        self._badge_active = False
-        self._toaster       = None  
+        self._on_quit          = on_quit
+        self._on_global_unlock = on_global_unlock
+        self._on_global_lock   = on_global_lock
+        self._hwnd             = None
+        self._hicon            = None
+        self._alive            = threading.Event()
+        self._thread           = threading.Thread(target=self._run, daemon=False, name="TrayThread")
+        self._badge_active     = False
+        self._unlocked         = False
+        self._toaster          = None  
+
     def start(self):
         self._thread.start()
         self._alive.wait(timeout=5)
@@ -165,6 +190,45 @@ class NativeTray:
                 win32gui.PostMessage(self._hwnd, WM_DESTROY, 0, 0)
             except Exception:
                 pass
+
+    def _get_tooltip_text(self) -> str:
+        if self._unlocked:
+            return "DeskWarden — Protection Paused (Unlocked)"
+        return "DeskWarden — Protected (Locked)"
+
+    def _update_tray_visuals(self):
+        if not self._hwnd:
+            return
+        try:
+            new_hicon = _pil_to_hicon(make_icon(unlocked=self._unlocked, badge=self._badge_active))
+
+            nid = NOTIFYICONDATA()
+            nid.cbSize = ctypes.sizeof(NOTIFYICONDATA)
+            nid.hWnd   = self._hwnd
+            nid.uID    = 1
+            nid.uFlags = NIF_ICON | NIF_TIP
+            nid.hIcon  = new_hicon
+            nid.szTip  = self._get_tooltip_text()[:127]
+            Shell_NotifyIcon(NIM_MODIFY, ctypes.byref(nid))
+
+            old_hicon = self._hicon
+            self._hicon = new_hicon
+            if old_hicon:
+                try:
+                    ctypes.windll.user32.DestroyIcon(old_hicon)
+                except Exception:
+                    pass
+        except Exception as e:
+            log_crash("NativeTray._update_tray_visuals", e)
+
+    def set_protection_status(self, unlocked: bool):
+        """Zmení stav ikony, tooltipu a kontextového menu na odomknuté/zamknuté."""
+        self._unlocked = bool(unlocked)
+        self._update_tray_visuals()
+
+    def set_badge(self, active: bool):
+        self._badge_active = bool(active)
+        self._update_tray_visuals()
 
     def _run(self):
         try:
@@ -188,7 +252,7 @@ class NativeTray:
                 wc.lpszClassName, "DeskWarden", 0,
                 0, 0, 0, 0, 0, 0, wc.hInstance, None)
 
-            self._hicon = _pil_to_hicon(make_icon())
+            self._hicon = _pil_to_hicon(make_icon(unlocked=self._unlocked, badge=self._badge_active))
 
             nid = NOTIFYICONDATA()
             nid.cbSize           = ctypes.sizeof(NOTIFYICONDATA)
@@ -197,7 +261,7 @@ class NativeTray:
             nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP
             nid.uCallbackMessage = TRAY_MSG
             nid.hIcon            = self._hicon
-            nid.szTip            = "DeskWarden — Running"
+            nid.szTip            = self._get_tooltip_text()[:127]
             Shell_NotifyIcon(NIM_ADD, ctypes.byref(nid))
 
             self._alive.set()
@@ -217,38 +281,7 @@ class NativeTray:
             except Exception:
                 pass
 
-    def set_badge(self, active: bool):
-       
-        if not self._hwnd:
-            return
-        try:
-            self._badge_active = bool(active)
-            img = make_icon()
-            if active:
-                d = ImageDraw.Draw(img)
-                d.ellipse([42, 2, 62, 22], fill="#ef4444", outline="#1a0f2e", width=3)
-            new_hicon = _pil_to_hicon(img)
-
-            nid = NOTIFYICONDATA()
-            nid.cbSize = ctypes.sizeof(NOTIFYICONDATA)
-            nid.hWnd   = self._hwnd
-            nid.uID    = 1
-            nid.uFlags = NIF_ICON
-            nid.hIcon  = new_hicon
-            Shell_NotifyIcon(NIM_MODIFY, ctypes.byref(nid))
-
-            old_hicon = self._hicon
-            self._hicon = new_hicon
-            if old_hicon:
-                try:
-                    ctypes.windll.user32.DestroyIcon(old_hicon)
-                except Exception:
-                    pass
-        except Exception as e:
-            log_crash("NativeTray.set_badge", e)
-
     def show_update_toast(self, version: str, message: str = ""):
-        
         title = f"DeskWarden {version} is available"[:63]
         body = message or "Click to see what's new and update."
 
@@ -262,7 +295,6 @@ class NativeTray:
                 return
             except Exception as e:
                 log_crash("NativeTray.show_update_toast (windows_toasts)", e)
-                
 
         if not self._hwnd:
             return
@@ -289,9 +321,25 @@ class NativeTray:
     def _show_menu(self):
         try:
             hmenu = win32gui.CreatePopupMenu()
-            win32gui.AppendMenu(hmenu, MF_STRING,    IDM_CONTROL_PANEL, "Open Control Panel")
-            win32gui.AppendMenu(hmenu, MF_SEPARATOR, 0,            "")
-            win32gui.AppendMenu(hmenu, MF_STRING,    IDM_QUIT,     "Quit DeskWarden")
+            
+            # Informatívny riadok o stave (neklikateľný / sivý text)
+            status_text = "● Status: 🔓 Unlocked (Paused)" if self._unlocked else "● Status: 🔒 Protected (Locked)"
+            win32gui.AppendMenu(hmenu, MF_STRING | MF_GRAYED, 0, status_text)
+            win32gui.AppendMenu(hmenu, MF_SEPARATOR, 0, "")
+
+            win32gui.AppendMenu(hmenu, MF_STRING, IDM_CONTROL_PANEL, "Open Control Panel")
+            win32gui.AppendMenu(hmenu, MF_SEPARATOR, 0, "")
+
+            # Ak je odomknuté, "Unlock" je zosivený. Ak je zamknuté, "Lock" je zosivený.
+            unlock_flags = MF_STRING | (MF_GRAYED if self._unlocked else 0)
+            lock_flags   = MF_STRING | (0 if self._unlocked else MF_GRAYED)
+
+            win32gui.AppendMenu(hmenu, unlock_flags, IDM_GLOBAL_UNLOCK, "🔓 Unlock protection")
+            win32gui.AppendMenu(hmenu, lock_flags,   IDM_GLOBAL_LOCK,   "🔒 Lock protection")
+
+            win32gui.AppendMenu(hmenu, MF_SEPARATOR, 0, "")
+            win32gui.AppendMenu(hmenu, MF_STRING,    IDM_QUIT,          "Quit DeskWarden")
+            
             pt = win32gui.GetCursorPos()
             win32gui.SetForegroundWindow(self._hwnd)
             cmd = ctypes.windll.user32.TrackPopupMenu(
@@ -299,8 +347,15 @@ class NativeTray:
                 TPM_LEFTALIGN | TPM_RETURNCMD,
                 pt[0], pt[1], 0, self._hwnd, None)
             win32gui.DestroyMenu(hmenu)
+
             if cmd == IDM_CONTROL_PANEL:
                 threading.Thread(target=self._on_control_panel, daemon=True).start()
+            elif cmd == IDM_GLOBAL_UNLOCK and not self._unlocked:
+                if self._on_global_unlock:
+                    threading.Thread(target=self._on_global_unlock, daemon=True).start()
+            elif cmd == IDM_GLOBAL_LOCK and self._unlocked:
+                if self._on_global_lock:
+                    threading.Thread(target=self._on_global_lock, daemon=True).start()
             elif cmd == IDM_QUIT:
                 threading.Thread(target=self._on_quit, daemon=True).start()
         except Exception as e:
