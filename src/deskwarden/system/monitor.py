@@ -31,6 +31,51 @@ class AppMonitor(threading.Thread):
         self._lock           = threading.Lock()
         self._lock_queue     = queue.Queue()
 
+        # ── Global unlock & suspended processes state ──
+        self._global_unlocked = False
+        self._suspended_pids  = set()
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # Global unlock API
+    # ═════════════════════════════════════════════════════════════════════════
+
+    def is_global_unlocked(self) -> bool:
+        with self._lock:
+            return self._global_unlocked
+
+    def set_global_unlocked(self, value: bool):
+        with self._lock:
+            self._global_unlocked = bool(value)
+            self._busy = False
+            self._busy_exe = None
+            if not value:
+                # Pri opätovnom zamknutí vyčistíme _seen_pids,
+                # aby monitor opäť zamkol všetky bežiace chránené procesy
+                self._seen_pids.clear()
+        dlog("INFO", f"AppMonitor: global unlock set to {value}")
+
+    def track_suspended_pid(self, pid: int):
+        with self._lock:
+            self._suspended_pids.add(pid)
+
+    def untrack_suspended_pid(self, pid: int):
+        with self._lock:
+            self._suspended_pids.discard(pid)
+
+    def get_and_clear_suspended_pids(self) -> set:
+        with self._lock:
+            pids = set(self._suspended_pids)
+            self._suspended_pids.clear()
+            return pids
+
+    def get_suspended_pids(self) -> set:
+        with self._lock:
+            return set(self._suspended_pids)
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # Main loop & scanning
+    # ═════════════════════════════════════════════════════════════════════════
+
     def run(self):
         dlog("INFO", "AppMonitor: process scan loop started (every 300ms)")
         time.sleep(1)
@@ -61,6 +106,11 @@ class AppMonitor(threading.Thread):
             for pid in dead_seen:
                 del self._seen_pids[pid]
 
+            # _suspended_pids set
+            dead_suspended = [pid for pid in self._suspended_pids if not psutil.pid_exists(pid)]
+            for pid in dead_suspended:
+                self._suspended_pids.discard(pid)
+
     def _get_locked_item(self, exe_name, cfg):
         exe_name = exe_name.lower()
         base = os.path.basename(exe_name)
@@ -74,7 +124,6 @@ class AppMonitor(threading.Thread):
         return self._get_locked_item(exe_name, cfg) is not None
 
     def _ancestor_in_unlocked(self, pid, exe_lower):
-    
         try:
             proc = psutil.Process(pid)
             for _ in range(12):
@@ -145,7 +194,6 @@ class AppMonitor(threading.Thread):
                     continue
 
             if not alive:
-
                 if self._is_uac_consent_active():
                     continue
                 with self._lock:
@@ -186,7 +234,6 @@ class AppMonitor(threading.Thread):
 
     @staticmethod
     def _is_uac_consent_active():
-
         try:
             for proc in psutil.process_iter(["name"]):
                 if (proc.info["name"] or "").lower() == "consent.exe":
@@ -196,6 +243,10 @@ class AppMonitor(threading.Thread):
         return False
 
     def _scan_all_processes(self):
+        # Ak je ochrana globálne odomknutá, nič nezamykáme
+        if self.is_global_unlocked():
+            return
+
         cfg = load_config()
         if not cfg["locked_apps"] or not cfg["password_hash"]:
             return
@@ -206,18 +257,15 @@ class AppMonitor(threading.Thread):
                 name = (proc.info["name"] or "").lower()
                 exe  = (proc.info["exe"] or "").lower()
 
-                
                 app_item = self._get_locked_item(name or exe, cfg)
                 exe_lower = app_item.get("exe", "").lower() if app_item else exe
 
                 with self._lock:
-                    
                     unlocked_exe = self._unlocked_pids.get(pid)
                     if unlocked_exe:
                         if unlocked_exe == exe_lower:
                             continue   
                         else:
-                            
                             del self._unlocked_pids[pid]
 
                     # seen_pids check
@@ -229,7 +277,6 @@ class AppMonitor(threading.Thread):
                             del self._seen_pids[pid] 
 
                 if not app_item:
-                   
                     with self._lock:
                         self._seen_pids[pid] = exe
                     continue
@@ -269,7 +316,6 @@ class AppMonitor(threading.Thread):
                     continue
 
                 if self._is_uac_consent_active():
-                    
                     continue
 
                 lock_payload = dict(app_item)
@@ -330,12 +376,10 @@ class AppMonitor(threading.Thread):
         }
 
         with self._lock:
-            # unlocked_pids dict preserve
             alive_unlocked = {
                 pid: exe for pid, exe in self._unlocked_pids.items()
                 if psutil.pid_exists(pid)
             }
-            # seen_pids dict preserve
             alive_seen = {
                 pid: exe for pid, exe in self._seen_pids.items()
                 if psutil.pid_exists(pid)
