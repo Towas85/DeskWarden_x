@@ -66,6 +66,12 @@ def run_control_panel_mode():
         except ImportError:
             _HAS_SVG = False
 
+        try:
+            from ..recovery_dialog import close_active_recovery_dialog
+            close_active_recovery_dialog()
+        except Exception:
+            pass
+
         _startup_cfg = load_config()
         if not _startup_cfg.get("password_hash"):
             _win_holder = {}

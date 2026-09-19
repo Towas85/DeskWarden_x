@@ -2,7 +2,7 @@
 setlocal EnableDelayedExpansion
 
 :: ============================================================
-::  DeskWarden Uninstaller v1.0
+::  DeskWarden Uninstaller v1.2.0
 :: ============================================================
 
 set "ABORT=0"
@@ -55,7 +55,7 @@ exit /b 0
 cls
 echo.
 echo  ===========================================================
-echo   DeskWarden  ^|  Application Locker  ^|  v1.0 Uninstaller
+echo   DeskWarden  ^|  Application Locker  ^|  v1.2.0 Uninstaller
 echo  ===========================================================
 echo.
 echo   This uninstaller will:
@@ -201,20 +201,32 @@ goto :eof
 :step_remove_appdata
 echo.
 echo  -----------------------------------------------------------
-set /p "KEEPDATA=  Keep settings and locked app list? (y/n): "
+:ask_keepdata
+set "KEEPDATA="
+set /p "KEEPDATA=  Keep settings and locked app list? (y = Yes, n = No): "
 echo  -----------------------------------------------------------
 echo.
 
-if /i "!KEEPDATA!"=="n" (
-    if exist "!APPDATA_DIR!" (
-        rd /s /q "!APPDATA_DIR!" >nul 2>&1
-        call :ok "All settings and data removed."
-    ) else (
-        call :ok "No app data found."
-    )
+if /i "!KEEPDATA!"=="n" goto :remove_data
+if /i "!KEEPDATA!"=="no" goto :remove_data
+if /i "!KEEPDATA!"=="y" goto :keep_data
+if /i "!KEEPDATA!"=="yes" goto :keep_data
+echo   Please enter y or n only.
+echo.
+echo  -----------------------------------------------------------
+goto :ask_keepdata
+
+:remove_data
+if exist "!APPDATA_DIR!" (
+    rd /s /q "!APPDATA_DIR!" >nul 2>&1
+    call :ok "All settings and data removed."
 ) else (
-    call :ok "Settings kept."
+    call :ok "No app data found."
 )
+goto :eof
+
+:keep_data
+call :ok "Settings kept."
 goto :eof
 
 

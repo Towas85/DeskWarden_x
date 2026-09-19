@@ -13,7 +13,7 @@ from .config import load_config, save_config
 from .logging_utils import dlog
 
 
-CURRENT_VERSION  = "v1.1.0"
+CURRENT_VERSION  = "v1.2.0"
 GITHUB_API_URL   = "https://api.github.com/repos/muntasir018/DeskWarden/releases/latest"
 
 
@@ -87,18 +87,16 @@ def _extract_download_url(data: dict, html_url: str) -> str:
     return html_url
 
 
-def _extract_notes(data: dict, max_lines: int = 6) -> list:
+def _extract_notes(data: dict, max_lines: int = 80) -> list:
     
     body = (data.get("body") or "").strip()
     if not body:
         return []
     lines = []
     for raw in body.splitlines():
-        line = raw.strip().lstrip("-*#").strip()
-        if not line:
-            continue
-        if len(line) > 140:
-            line = line[:137] + "..."
+        line = raw.rstrip()
+        if len(line) > 500:
+            line = line[:497] + "..."
         lines.append(line)
         if len(lines) >= max_lines:
             break
@@ -169,12 +167,21 @@ def check_for_update(timeout: int = 8) -> dict:
                                 "download_url": result.get("download_url", ""),
                                 "notes":  result.get("notes", []),
                                 "error":  result["error"]})
-    # Save last check time to config (only on success or "up to date")
+    # Save last check time and persistent update cache to config
     if not result.get("error"):
         try:
             import datetime as _dt2
             _cfg_tmp = load_config()
             _cfg_tmp["last_update_check"] = _dt2.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if result.get("update_available"):
+                _cfg_tmp["cached_update_info"] = {
+                    "latest": result["latest"],
+                    "url": result["url"],
+                    "download_url": result.get("download_url", ""),
+                    "notes": result.get("notes", []),
+                }
+            else:
+                _cfg_tmp.pop("cached_update_info", None)
             save_config(_cfg_tmp)
         except Exception:
             pass
@@ -250,15 +257,37 @@ def is_version_skipped(version: str) -> bool:
 
 
 def get_cached_update_snapshot() -> dict:
-    
     with _update_lock:
         snap = dict(_update_result)
     latest = snap.get("latest")
     checked = snap.get("checked")
-    snap["update_available"] = bool(
-        checked and latest and
-        _version_tuple(latest) > _version_tuple(CURRENT_VERSION)
-    )
+    if checked and latest:
+        snap["update_available"] = bool(_version_tuple(latest) > _version_tuple(CURRENT_VERSION))
+        return snap
+
+    # Fallback to persistent disk cache across restarts
+    try:
+        cfg = load_config()
+        c_info = cfg.get("cached_update_info")
+        if c_info and isinstance(c_info, dict):
+            c_latest = (c_info.get("latest") or "").strip()
+            if c_latest and _version_tuple(c_latest) > _version_tuple(CURRENT_VERSION):
+                return {
+                    "checked": True,
+                    "update_available": True,
+                    "latest": c_latest,
+                    "url": c_info.get("url", ""),
+                    "download_url": c_info.get("download_url", ""),
+                    "notes": c_info.get("notes", []),
+                    "error": None,
+                }
+            elif c_latest and _version_tuple(c_latest) <= _version_tuple(CURRENT_VERSION):
+                cfg.pop("cached_update_info", None)
+                save_config(cfg)
+    except Exception:
+        pass
+
+    snap["update_available"] = False
     return snap
 
 

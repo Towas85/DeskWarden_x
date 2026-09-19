@@ -22,6 +22,7 @@ from . import ui_thread
 _cp_open_lock = threading.Lock()
 _cp_currently_open = False
 _auth_dlg_ref = None
+_quit_dlg_ref = None
 
 
 def show_control_panel_auth(on_success, cp_obj=None):
@@ -39,7 +40,7 @@ def show_control_panel_auth(on_success, cp_obj=None):
     dlog("INFO", "show_control_panel_auth: opening (lock acquired)")
 
     from PyQt6.QtWidgets import (
-        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+        QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
         QPushButton, QFrame, QGraphicsDropShadowEffect
     )
     from PyQt6.QtCore import Qt, QTimer
@@ -80,9 +81,19 @@ def show_control_panel_auth(on_success, cp_obj=None):
     _close_handler = [None]
 
     class _AuthDialog(QWidget):
-        
+        def keyPressEvent(self, ev):
+            if ev.key() == Qt.Key.Key_Escape:
+                self.close()
+            else:
+                super().keyPressEvent(ev)
+
         def closeEvent(self, ev):
             ev.accept()
+            try:
+                from .recovery_dialog import close_active_recovery_dialog
+                close_active_recovery_dialog(source_context="control_panel")
+            except Exception:
+                pass
             if _close_handler[0]:
                 _close_handler[0]()
 
@@ -108,7 +119,7 @@ def show_control_panel_auth(on_success, cp_obj=None):
     dlg.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     dlg.setFixedSize(460, 270)
 
-    qapp = ui_thread._qapp
+    qapp = ui_thread._qapp or QApplication.instance()
     sg = qapp.primaryScreen().geometry()
     dlg.move(sg.x() + (sg.width() - 460) // 2, sg.y() + (sg.height() - 270) // 2)
 
@@ -278,6 +289,8 @@ def show_control_panel_auth(on_success, cp_obj=None):
         QPushButton:hover {{ background: {_ACC2}; }}
         QPushButton:pressed {{ background: #5b21b6; }}
         QPushButton:disabled {{ background: #1e1a30; color: {_MUTE}; }}""")
+    unlock_btn.setAutoDefault(False)
+    unlock_btn.setDefault(False)
     rpl.addWidget(unlock_btn)
 
     _unlock_glow = QGraphicsDropShadowEffect(unlock_btn)
@@ -296,6 +309,59 @@ def show_control_panel_auth(on_success, cp_obj=None):
         _orig_leave(ev)
     unlock_btn.enterEvent = _ub_enter
     unlock_btn.leaveEvent = _ub_leave
+
+    # ── Forgot password link ───────────────────────────────────────────────
+    forgot_row = QWidget()
+    forgot_row.setFixedHeight(20)
+    forgot_row.setStyleSheet("background: transparent;")
+    frl = QHBoxLayout(forgot_row)
+    frl.setContentsMargins(0, 0, 0, 0)
+    frl.setSpacing(0)
+    frl.addStretch()
+
+    forgot_btn = QPushButton("Forgot password?")
+    forgot_btn.setFont(QFont("Segoe UI", 8))
+    forgot_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+    forgot_btn.setAutoDefault(False)
+    forgot_btn.setDefault(False)
+    forgot_btn.setStyleSheet(f"""
+        QPushButton {{ background: transparent; color: {_MUTE}; border: none; }}
+        QPushButton:hover {{ color: {_ACC2}; text-decoration: none; }}
+    """)
+
+    def _open_recovery():
+        try:
+            from .recovery_dialog import show_recovery_modal
+            def _on_rec_success():
+                _unlocked[0] = True
+                dlg.close()
+                on_success()
+            def _on_rec_close():
+                if not _unlocked[0] and not _closed_flag[0]:
+                    dlg.raise_()
+                    dlg.activateWindow()
+                    pw_edit.setFocus()
+            rec = show_recovery_modal(on_success=_on_rec_success, on_close=_on_rec_close, source_context="control_panel", parent=None)
+            if not rec:
+                dlg.raise_()
+                dlg.activateWindow()
+        except Exception as e:
+            dlg.raise_()
+            dlg.activateWindow()
+            log_crash("show_control_panel_auth/_open_recovery", e)
+
+    forgot_btn.clicked.connect(_open_recovery)
+    frl.addWidget(forgot_btn)
+    frl.addStretch()
+
+    try:
+        from .recovery_dialog import is_recovery_available
+        if not is_recovery_available(load_config()):
+            forgot_btn.setVisible(False)
+    except Exception:
+        pass
+
+    rpl.addWidget(forgot_row)
 
     body_lay.addWidget(rp, 1)
     card_lay.addWidget(body, 1)
@@ -318,6 +384,7 @@ def show_control_panel_auth(on_success, cp_obj=None):
 
 
     _unlocked = [False]
+    _closed_flag = [False]
 
     def _release_lock():
         global _cp_currently_open, _auth_dlg_ref
@@ -327,6 +394,17 @@ def show_control_panel_auth(on_success, cp_obj=None):
         dlog("INFO", "show_control_panel_auth: auth dialog closed — lock released")
 
     def _on_close():
+        if _closed_flag[0]:
+            return
+        _closed_flag[0] = True
+        try:
+            from .recovery_dialog import close_active_recovery_dialog
+            if _unlocked[0]:
+                close_active_recovery_dialog()
+            else:
+                close_active_recovery_dialog(source_context="control_panel")
+        except Exception:
+            pass
         if _unlocked[0]:
             dlog("INFO", "show_control_panel_auth: closed after successful unlock — lock stays with Control Panel window")
             global _auth_dlg_ref
@@ -356,24 +434,54 @@ def show_control_panel_auth(on_success, cp_obj=None):
             _cd[0] -= 1; QTimer.singleShot(1000, _tick)
         _tick()
 
-    def _attempt():
-        is_locked, wait_s = check_locked_out(CTX)
-        if is_locked: _start_cd(wait_s); return
-        if hash_pw(pw_edit.text()) == cfg.get("password_hash", ""):
-            reset_attempt_state(CTX)
-            log_security_event("success", CTX, "opened control panel")
-            _unlocked[0] = True
-            dlg.close()
-        else:
-            state = record_wrong_attempt(CTX); pw_edit.clear()
-            if state["locked"]:
-                _start_cd(state["wait"])
-            else:
-                rem = PENALTY_THRES - state["count"]
-                err_lbl.setText(f"✗ Wrong password. {rem} attempt(s) remaining." if rem > 0
-                                else "✗ Wrong password")
-            pw_edit.setFocus()
+    def _on_txt_changed(t):
+        if err_lbl.text() == "Please enter your password.":
+            err_lbl.setText("")
+    pw_edit.textChanged.connect(_on_txt_changed)
 
+    _attempting = [False]
+
+    def _attempt():
+        if _attempting[0] or _unlocked[0]:
+            return
+        _attempting[0] = True
+        try:
+            entered_txt = pw_edit.text()
+            if not entered_txt:
+                err_lbl.setText("Please enter your password.")
+                pw_edit.setFocus()
+                return
+            is_locked, wait_s = check_locked_out(CTX)
+            if is_locked:
+                _start_cd(wait_s)
+                return
+            current_pw_hash = load_config().get("password_hash", cfg.get("password_hash", ""))
+            if hash_pw(entered_txt) == current_pw_hash:
+                reset_attempt_state(CTX)
+                log_security_event("success", CTX, "opened control panel")
+                _unlocked[0] = True
+                try:
+                    from .recovery_dialog import close_active_recovery_dialog
+                    close_active_recovery_dialog()
+                except Exception:
+                    pass
+                dlg.hide()
+                dlg.close()
+            else:
+                state = record_wrong_attempt(CTX)
+                pw_edit.clear()
+                if state["locked"]:
+                    _start_cd(state["wait"])
+                else:
+                    rem = PENALTY_THRES - state["count"]
+                    err_lbl.setText(f"✗ Wrong password. {rem} attempt(s) remaining." if rem > 0
+                                    else "✗ Wrong password")
+                pw_edit.setFocus()
+        finally:
+            _attempting[0] = False
+
+    close_b.setAutoDefault(False)
+    close_b.setDefault(False)
     unlock_btn.clicked.connect(_attempt)
     pw_edit.returnPressed.connect(_attempt)
     close_b.clicked.connect(dlg.close)
@@ -381,17 +489,27 @@ def show_control_panel_auth(on_success, cp_obj=None):
     dlg.show(); dlg.activateWindow(); pw_edit.setFocus()
     QTimer.singleShot(200, lambda: (dlg.activateWindow(), pw_edit.setFocus()))
 
-   
     _lk, _ws = check_locked_out(CTX)
     if _lk:
         _start_cd(_ws)
     global _auth_dlg_ref
-    _auth_dlg_ref = dlg  
+    _auth_dlg_ref = dlg
+
 
 def show_quit_auth(on_success):
+    global _quit_dlg_ref
+    if _quit_dlg_ref is not None:
+        try:
+            if _quit_dlg_ref.isVisible():
+                _quit_dlg_ref.activateWindow()
+                _quit_dlg_ref.raise_()
+                return
+        except Exception:
+            _quit_dlg_ref = None
+
     from PyQt6.QtWidgets import (
-        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-        QPushButton, QFrame, QGraphicsDropShadowEffect
+        QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+        QPushButton, QFrame
     )
     from PyQt6.QtCore import Qt, QTimer
     from PyQt6.QtGui import QColor, QPainter, QPainterPath, QBrush, QPen, QFont, QCursor
@@ -405,6 +523,8 @@ def show_quit_auth(on_success):
     _SIDE = "#100810"
     _CARD = "#110f1e"
     _BORD = "#3d1020"
+    _ACC  = "#7c3aed"
+    _ACC2 = "#9d5cff"
     _RED  = "#ef4444"
     _FG   = "#fca5a5"
     _MUTE = "#5a5478"
@@ -430,8 +550,49 @@ def show_quit_auth(on_success):
             p.setPen(QPen(self._border, 1))
             p.drawPath(path)
 
+    class _QuitDialog(QWidget):
+        def __init__(self):
+            super().__init__()
+            self._drag_pos = None
+
+        def mousePressEvent(self, ev):
+            if ev.button() == Qt.MouseButton.LeftButton and ev.position().y() <= 36:
+                self._drag_pos = ev.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                ev.accept()
+            else:
+                super().mousePressEvent(ev)
+
+        def mouseMoveEvent(self, ev):
+            if self._drag_pos is not None and ev.buttons() == Qt.MouseButton.LeftButton:
+                self.move(ev.globalPosition().toPoint() - self._drag_pos)
+                ev.accept()
+            else:
+                super().mouseMoveEvent(ev)
+
+        def mouseReleaseEvent(self, ev):
+            self._drag_pos = None
+            super().mouseReleaseEvent(ev)
+
+        def keyPressEvent(self, ev):
+            if ev.key() == Qt.Key.Key_Escape:
+                self.close()
+            elif ev.key() == Qt.Key.Key_F4 and ev.modifiers() & Qt.KeyboardModifier.AltModifier:
+                ev.ignore()
+            else:
+                super().keyPressEvent(ev)
+
+        def closeEvent(self, ev):
+            global _quit_dlg_ref
+            _quit_dlg_ref = None
+            try:
+                from .recovery_dialog import close_active_recovery_dialog
+                close_active_recovery_dialog(source_context="quit_auth")
+            except Exception:
+                pass
+            super().closeEvent(ev)
+
     # ── Main dialog window ────────────────────────────────────────────────────
-    dlg = QWidget()
+    dlg = _QuitDialog()
     dlg.setWindowFlags(
         Qt.WindowType.FramelessWindowHint |
         Qt.WindowType.WindowStaysOnTopHint |
@@ -440,21 +601,15 @@ def show_quit_auth(on_success):
     dlg.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     dlg.setFixedSize(460, 270)
 
-    qapp = ui_thread._qapp
-    sg = qapp.primaryScreen().geometry()
-    dlg.move(sg.x() + (sg.width()  - 460) // 2,
-             sg.y() + (sg.height() - 270) // 2)
-
-    def _block_key(ev):
-        if (ev.key() == Qt.Key.Key_F4 and
-                ev.modifiers() & Qt.KeyboardModifier.AltModifier):
-            ev.ignore()
-    dlg.keyPressEvent = _block_key
+    qapp = ui_thread._qapp or QApplication.instance()
+    if qapp:
+        sg = qapp.primaryScreen().geometry()
+        dlg.move(sg.x() + (sg.width()  - 460) // 2,
+                 sg.y() + (sg.height() - 270) // 2)
 
     outer_lay = QVBoxLayout(dlg)
     outer_lay.setContentsMargins(0, 0, 0, 0)
 
-    # ── Outer card (shadow removed to avoid checkered corner artifacts) ───────
     card = _RCard(dlg, bg=_CARD, border=_BORD, radius=16)
     outer_lay.addWidget(card)
 
@@ -476,9 +631,6 @@ def show_quit_auth(on_success):
     tbl.setContentsMargins(14, 0, 10, 0)
     tbl.setSpacing(0)
 
-    tbl.addSpacing(0)
-
-    # ── Logo offset adjustment (Quit dialog titlebar) ──
     _QUIT_LOGO_OFFSET_X = 3   
     _QUIT_LOGO_OFFSET_Y = 2   
 
@@ -628,8 +780,7 @@ def show_quit_auth(on_success):
     rpl.addWidget(pw_edit)
 
     q_eye_btn = QPushButton("Show", pw_edit)
-    q_eye_btn.setFixedSize(32, 22)
-    q_eye_btn.move(231, 8)
+    q_eye_btn.setFixedSize(34, 22)
     q_eye_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
     q_eye_btn.setStyleSheet(f"""
         QPushButton {{ background: transparent; color: {_MUTE};
@@ -642,6 +793,16 @@ def show_quit_auth(on_success):
                             else QLineEdit.EchoMode.Password)
         q_eye_btn.setText("Hide" if _q_pw_visible[0] else "Show")
     q_eye_btn.clicked.connect(_q_toggle_eye)
+
+    def _pos_q_eye():
+        q_eye_btn.move(pw_edit.width() - q_eye_btn.width() - 6,
+                       (pw_edit.height() - q_eye_btn.height()) // 2)
+    _orig_pw_resize = pw_edit.resizeEvent
+    def _pw_resize(ev):
+        _orig_pw_resize(ev)
+        _pos_q_eye()
+    pw_edit.resizeEvent = _pw_resize
+    _pos_q_eye()
 
     acc_line = QFrame()
     acc_line.setFixedHeight(2)
@@ -665,56 +826,79 @@ def show_quit_auth(on_success):
                 stop:0 #c0392b, stop:1 #991b1b);
             color: white; border: none; border-radius: 10px; padding: 0 20px;
         }}
-        QPushButton:hover   {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 #cc4536, stop:1 #a01f1f); }}
+        QPushButton:hover {{
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #dc2626, stop:1 #b91c1c);
+        }}
         QPushButton:pressed  {{ background: #7f1d1d; }}
         QPushButton:disabled {{ background: #1e1a30; color: {_MUTE}; }}""")
-
-    _quit_glow = QGraphicsDropShadowEffect()
-    _quit_glow.setBlurRadius(0)
-    _quit_glow.setColor(QColor(_RED))
-    _quit_glow.setOffset(0, 0)
-    quit_btn.setGraphicsEffect(_quit_glow)
-
-    def _quit_enter(ev):
-        _quit_glow.setBlurRadius(25)
-        QPushButton.enterEvent(quit_btn, ev)
-
-    def _quit_leave(ev):
-        _quit_glow.setBlurRadius(0)
-        QPushButton.leaveEvent(quit_btn, ev)
-
-    quit_btn.enterEvent = _quit_enter
-    quit_btn.leaveEvent = _quit_leave
-
+    quit_btn.setAutoDefault(False)
+    quit_btn.setDefault(False)
     rpl.addWidget(quit_btn)
+
+    # ── Forgot password link ───────────────────────────────────────────────
+    forgot_row_q = QWidget()
+    forgot_row_q.setFixedHeight(20)
+    forgot_row_q.setStyleSheet("background: transparent;")
+    frl_q = QHBoxLayout(forgot_row_q)
+    frl_q.setContentsMargins(0, 0, 0, 0)
+    frl_q.setSpacing(0)
+    frl_q.addStretch()
+
+    forgot_btn_q = QPushButton("Forgot password?")
+    forgot_btn_q.setFont(QFont("Segoe UI", 8))
+    forgot_btn_q.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+    forgot_btn_q.setAutoDefault(False)
+    forgot_btn_q.setDefault(False)
+    forgot_btn_q.setStyleSheet(f"""
+        QPushButton {{ background: transparent; color: {_MUTE}; border: none; }}
+        QPushButton:hover {{ color: #f87171; text-decoration: none; }}
+    """)
+
+    def _open_recovery_q():
+        try:
+            from .recovery_dialog import show_recovery_modal
+            def _on_rec_success_q():
+                _unlocked_q[0] = True
+                dlg.close()
+                on_success()
+            def _on_rec_close_q():
+                if not _unlocked_q[0]:
+                    dlg.raise_()
+                    dlg.activateWindow()
+                    pw_edit.setFocus()
+            rec = show_recovery_modal(on_success=_on_rec_success_q, on_close=_on_rec_close_q, source_context="quit_auth", parent=None)
+            if not rec:
+                dlg.raise_()
+                dlg.activateWindow()
+        except Exception as e:
+            dlg.raise_()
+            dlg.activateWindow()
+            log_crash("show_quit_auth/_open_recovery_q", e)
+
+    forgot_btn_q.clicked.connect(_open_recovery_q)
+    frl_q.addWidget(forgot_btn_q)
+    frl_q.addStretch()
+
+    try:
+        from .recovery_dialog import is_recovery_available
+        if not is_recovery_available(load_config()):
+            forgot_btn_q.setVisible(False)
+    except Exception:
+        pass
+
+    rpl.addWidget(forgot_row_q)
 
     body_lay.addWidget(rp, 1)
     card_lay.addWidget(body, 1)
 
-    # ── Drag support ──────────────────────────────────────────────────────────
-    _drag = [False, 0, 0]
-
-    def _tb_press(ev):
-        if ev.button() == Qt.MouseButton.LeftButton:
-            _drag[0] = True
-            _drag[1] = ev.globalPosition().x() - dlg.x()
-            _drag[2] = ev.globalPosition().y() - dlg.y()
-
-    def _tb_move(ev):
-        if _drag[0]:
-            dlg.move(int(ev.globalPosition().x() - _drag[1]),
-                     int(ev.globalPosition().y() - _drag[2]))
-
-    def _tb_release(ev):
-        _drag[0] = False
-
-    tb.mousePressEvent  = _tb_press
-    tb.mouseMoveEvent   = _tb_move
-    tb.mouseReleaseEvent = _tb_release
-
     # ── Auth logic ────────────────────────────────────────────────────────────
     CTX_Q = "Quit"
+
+    def _on_txt_changed_q(t):
+        if err_lbl.text() == "Please enter your password.":
+            err_lbl.setText("")
+    pw_edit.textChanged.connect(_on_txt_changed_q)
 
     def _start_cd(seconds):
         pw_edit.setEnabled(False)
@@ -737,27 +921,49 @@ def show_quit_auth(on_success):
 
         _tick()
 
+    _attempting_q = [False]
+    _unlocked_q = [False]
+
     def _attempt():
-        is_locked, wait_s = check_locked_out(CTX_Q)
-        if is_locked:
-            _start_cd(wait_s)
+        if _attempting_q[0] or _unlocked_q[0]:
             return
-        if hash_pw(pw_edit.text()) == cfg.get("password_hash", ""):
-            reset_attempt_state(CTX_Q)
-            log_security_event("success", CTX_Q, "quit confirmed")
-            dlg.close()
-            on_success()
-        else:
-            state = record_wrong_attempt(CTX_Q)
-            pw_edit.clear()
-            if state["locked"]:
-                _start_cd(state["wait"])
+        _attempting_q[0] = True
+        try:
+            entered_txt = pw_edit.text()
+            if not entered_txt:
+                err_lbl.setText("Please enter your password.")
+                pw_edit.setFocus()
+                return
+            is_locked, wait_s = check_locked_out(CTX_Q)
+            if is_locked:
+                _start_cd(wait_s)
+                return
+            current_pw_hash = load_config().get("password_hash", cfg.get("password_hash", ""))
+            if hash_pw(entered_txt) == current_pw_hash:
+                _unlocked_q[0] = True
+                reset_attempt_state(CTX_Q)
+                log_security_event("success", CTX_Q, "quit confirmed")
+                try:
+                    from .recovery_dialog import close_active_recovery_dialog
+                    close_active_recovery_dialog()
+                except Exception:
+                    pass
+                dlg.hide()
+                dlg.close()
+                on_success()
             else:
-                rem = PENALTY_THRES - state["count"]
-                err_lbl.setText(
-                    f"✗ Wrong password. {rem} attempt(s) remaining." if rem > 0
-                    else "✗ Wrong password — Quit cancelled.")
-            pw_edit.setFocus()
+                state = record_wrong_attempt(CTX_Q)
+                pw_edit.clear()
+                if state["locked"]:
+                    _start_cd(state["wait"])
+                else:
+                    rem = PENALTY_THRES - state["count"]
+                    err_lbl.setText(
+                        f"✗ Wrong password. {rem} attempt(s) remaining." if rem > 0
+                        else "✗ Wrong password — Quit cancelled.")
+                pw_edit.setFocus()
+        finally:
+            _attempting_q[0] = False
 
     quit_btn.clicked.connect(_attempt)
     pw_edit.returnPressed.connect(_attempt)
@@ -767,23 +973,11 @@ def show_quit_auth(on_success):
     pw_edit.setFocus()
     QTimer.singleShot(200, lambda: (dlg.activateWindow(), pw_edit.setFocus()))
 
-   
     _lk, _ws = check_locked_out(CTX_Q)
     if _lk:
         _start_cd(_ws)
 
-    from PyQt6.QtCore import QEventLoop as _QEventLoop
-    _local_loop = _QEventLoop()
-    close_b.clicked.connect(_local_loop.quit)
-    dlg.destroyed.connect(_local_loop.quit)
-    _orig_close = dlg.close
-
-    def _close_and_quit():
-        _orig_close()
-        _local_loop.quit()
-
-    dlg.close = _close_and_quit
-    _local_loop.exec()
+    _quit_dlg_ref = dlg
 
 
 def release_control_panel_lock():

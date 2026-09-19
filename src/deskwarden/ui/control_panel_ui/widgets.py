@@ -5,9 +5,9 @@ DeskWarden - ui/control_panel_ui/widgets.py
 
 from PyQt6.QtWidgets import (
     QFrame, QLabel, QPushButton, QWidget, QSizePolicy,
-    QGraphicsDropShadowEffect, QHBoxLayout,
+    QGraphicsDropShadowEffect, QHBoxLayout, QAbstractButton,
 )
-from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty, QRectF
 from PyQt6.QtGui import (
     QColor, QFont, QPainter, QPainterPath, QBrush, QPen, QCursor,
 )
@@ -64,8 +64,6 @@ class _Card(QFrame):
             p.fillPath(strip, QBrush(self._accent))
 
 
-
-
 class _IconBox(QLabel):
     def __init__(self, glyph, size=38, bg="#1e0d40", fg="#c4b5fd",
                  radius=10, parent=None):
@@ -101,18 +99,30 @@ class _AppIconBox(QFrame):
     def paintEvent(self, ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width(), self.height(),
                             self._r, self._r)
         p.fillPath(path, QBrush(self._bg))
         if self._pixmap:
             p.setClipPath(path)
-            x = (self.width() - self._pixmap.width()) // 2
-            y = (self.height() - self._pixmap.height()) // 2
-            p.drawPixmap(x, y, self._pixmap)
+            pw = float(self._pixmap.width())
+            ph = float(self._pixmap.height())
+            dpr = self._pixmap.devicePixelRatio()
+            if dpr > 0:
+                pw /= dpr
+                ph /= dpr
+            target_size = min(30.0, float(self.width() - 6), float(self.height() - 6))
+            scale = min(target_size / max(pw, 1.0), target_size / max(ph, 1.0))
+            dw = pw * scale
+            dh = ph * scale
+            dx = (float(self.width()) - dw) / 2.0
+            dy = (float(self.height()) - dh) / 2.0
+            target_rect = QRectF(dx, dy, dw, dh)
+            p.drawPixmap(target_rect, self._pixmap, QRectF(0, 0, self._pixmap.width(), self._pixmap.height()))
         else:
             p.setPen(QPen(self._fg))
-            p.setFont(QFont("Segoe UI Emoji", self.width() // 3))
+            p.setFont(QFont("Segoe UI Emoji", 17))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._glyph)
 
 
@@ -408,5 +418,75 @@ class _RotatingStatus(QWidget):
             self._timer.stop()
         except Exception:
             pass
+
+
+class _ToggleSwitch(QAbstractButton):
+    """Modern iOS/fluent style pill toggle switch widget with smooth animation."""
+
+    def __init__(self, parent=None, checked=False):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setChecked(checked)
+        self.setFixedSize(38, 20)
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._thumb_pos = 20.0 if checked else 2.0
+        self._anim = QPropertyAnimation(self, b"thumb_pos", self)
+        self._anim.setDuration(120)
+        self._anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        self.toggled.connect(self._on_toggled)
+
+    def get_thumb_pos(self):
+        return self._thumb_pos
+
+    def set_thumb_pos(self, pos):
+        self._thumb_pos = float(pos)
+        self.update()
+
+    thumb_pos = pyqtProperty(float, get_thumb_pos, set_thumb_pos)
+
+    def _on_toggled(self, checked):
+        end = 20.0 if checked else 2.0
+        self._anim.stop()
+        self._anim.setStartValue(self._thumb_pos)
+        self._anim.setEndValue(end)
+        self._anim.start()
+
+    def setChecked(self, checked):
+        super().setChecked(checked)
+        self._thumb_pos = 20.0 if checked else 2.0
+        self.update()
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = self.rect()
+        enabled = self.isEnabled()
+        checked = self.isChecked()
+
+        if not enabled:
+            bg = QColor("#161424")
+            border = QColor("#2a2545")
+            thumb_c = QColor("#443f60")
+        elif checked:
+            bg = QColor("#7c3aed")
+            border = QColor("#9d5cff")
+            thumb_c = QColor("#ffffff")
+        else:
+            bg = QColor("#1e1b2e")
+            border = QColor("#3f3a5e")
+            thumb_c = QColor("#94a3b8")
+
+        # Track pill
+        path = QPainterPath()
+        path.addRoundedRect(1.0, 1.0, float(r.width() - 2), float(r.height() - 2), 9.0, 9.0)
+        p.fillPath(path, QBrush(bg))
+        p.setPen(QPen(border, 1.2))
+        p.drawPath(path)
+
+        # Thumb
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(thumb_c))
+        p.drawEllipse(int(self._thumb_pos), 3, 14, 14)
+
 
 

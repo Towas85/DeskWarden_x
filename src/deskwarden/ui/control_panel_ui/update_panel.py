@@ -26,9 +26,6 @@ class _UpdatePanelMixin:
 
     def _toggle_auto(self):
         self._cfg["autostart"] = self._auto_cb.isChecked()
-        save_config(self._cfg)
-        set_autostart(self._cfg["autostart"])
-
     # ── Settings nav badge ───────────────────────────────────────────────
 
     def _refresh_settings_badge(self):
@@ -48,6 +45,14 @@ class _UpdatePanelMixin:
                 dot.hide()
         except Exception:
             pass
+
+    def _refresh_settings_panel(self):
+        """Refreshes update status pill, timestamps, and badges when Settings tab opens."""
+        self._refresh_settings_badge()
+        snap = get_cached_update_snapshot()
+        if snap.get("checked") and snap.get("latest"):
+            self._update_result_pending = snap
+            self._apply_update_result()
 
     # ── Update check ─────────────────────────────────────────────────────
 

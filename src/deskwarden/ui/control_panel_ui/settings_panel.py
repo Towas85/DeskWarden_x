@@ -9,8 +9,9 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QCursor, QPixmap
 
-from ...core.updater import CURRENT_VERSION
+from ...core.updater import CURRENT_VERSION, get_cached_update_snapshot
 from ...core.website_link import get_website_url
+from ...core.paths import asset_path
 
 from .theme import (
     _BG, _CARD, _CARD2, _BORD, _ACC, _ACC2, _ACC3, _TEAL,
@@ -24,7 +25,7 @@ class _SettingsPanelMixin:
     # ── Build ────────────────────────────────────────────────────────────
 
     def _build_cp_panel(self):
-        panel = QWidget(); panel.setStyleSheet(f"background: {_BG};")
+        panel = QWidget(); panel.setStyleSheet(f"background: {_BG};"); panel.hide()
         pl = QVBoxLayout(panel)
         pl.setContentsMargins(0, 0, 0, 0); pl.setSpacing(10)
 
@@ -103,7 +104,7 @@ class _SettingsPanelMixin:
 
         brow = QHBoxLayout(); brow.setSpacing(8)
 
-        export_btn = QPushButton("⬇  Export Settings")
+        export_btn = QPushButton("⬆  Export Settings")
         export_btn.setFixedHeight(34)
         export_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         export_btn.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
@@ -134,7 +135,7 @@ class _SettingsPanelMixin:
         export_btn.enterEvent = _export_enter
         export_btn.leaveEvent = _export_leave
 
-        import_btn = QPushButton("⬆  Import Settings")
+        import_btn = QPushButton("⬇  Import Settings")
         import_btn.setFixedHeight(34)
         import_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         import_btn.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
@@ -259,6 +260,11 @@ class _SettingsPanelMixin:
         self._update_status.setWordWrap(True)
         self._update_status_layout.addWidget(self._update_status, 1)
         urow.addWidget(self._update_status_box, 1)
+
+        _snap = get_cached_update_snapshot()
+        if _snap.get("checked") and _snap.get("latest"):
+            self._update_result_pending = _snap
+            self._apply_update_result()
 
         ucl.addLayout(urow)
 
@@ -407,7 +413,7 @@ class _SettingsPanelMixin:
         ver_lbl = QLabel(
             '<span style="color:#f5f0ff; font-weight:700;">DeskWarden</span>'
             '&nbsp;&nbsp;'
-            '<span style="color:#c4b5fd;">v1.1.0</span>'
+            '<span style="color:#c4b5fd;">v1.2.0</span>'
         )
         ver_lbl.setFont(QFont("Segoe UI", 9))
         ver_lbl.setStyleSheet("background: transparent;")
@@ -477,11 +483,17 @@ class _SettingsPanelMixin:
         web_hl.setContentsMargins(0, 0, 0, 0); web_hl.setSpacing(3)
         web_hl.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        web_icon = QLabel("🌐")
-        web_icon.setFont(QFont("Segoe UI", 8))
+        web_icon = QLabel()
         web_icon.setStyleSheet("background: transparent;")
+        _dw_pm = QPixmap(asset_path("icon.png"))
+        if not _dw_pm.isNull():
+            web_icon.setPixmap(_dw_pm.scaled(13, 13,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
         web_icon.setFixedSize(13, 13)
         web_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        web_icon.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        web_icon.mousePressEvent = lambda _ev: _open_website()
 
         web_txt = QLabel('<a href="#" style="color:#9d5cff; text-decoration:none;">Website</a>')
         web_txt.setFont(QFont("Segoe UI", 8, QFont.Weight.Medium))

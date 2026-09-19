@@ -7,14 +7,110 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QScrollArea, QGraphicsDropShadowEffect, QApplication,
 )
-from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve
-from PyQt6.QtGui import QColor, QFont, QCursor
+from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QSize
+from PyQt6.QtGui import QColor, QFont, QCursor, QIcon
+import os
 
 from ...core.logging_utils import dlog
+from ...core.paths import asset_path
 from ...core.updater import CURRENT_VERSION
 from ...core.website_link import get_website_url
 from .theme import _CARD, _CARD2, _BORD, _FG, _MUTE, _ACC2
 from .widgets import _Card
+
+
+import re
+
+def _render_markdown_to_rich_html(md_content):
+    if not md_content:
+        return '<span style="color: #6b6490;">See the release page for full details.</span>'
+
+    if isinstance(md_content, (list, tuple)):
+        raw_text = '\n'.join(str(x) for x in md_content)
+    else:
+        raw_text = str(md_content)
+
+    lines = raw_text.strip().splitlines()
+    if not lines:
+        return '<span style="color: #6b6490;">See the release page for full details.</span>'
+
+    html_out = []
+    in_ul = False
+    in_ol = False
+
+    def _close_lists():
+        nonlocal in_ul, in_ol
+        if in_ul:
+            html_out.append('</ul>')
+            in_ul = False
+        if in_ol:
+            html_out.append('</ol>')
+            in_ol = False
+
+    def _inline_format(txt):
+        txt = re.sub(
+            r'`([^`]+)`',
+            r'<span style="background: #1c1833; color: #c4b5fd; padding: 1px 5px; border-radius: 4px; font-family: Consolas, monospace; font-size: 11px;">\1</span>',
+            txt
+        )
+        txt = re.sub(r'\*\*(.*?)\*\*', r'<b style="color: #f0ecff;">\1</b>', txt)
+        txt = re.sub(r'(?<!\*)\*([^*]+)\*(?!\*)', r'<i style="color: #a78bfa;">\1</i>', txt)
+        txt = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2" style="color: #38bdf8; text-decoration: none;">\1</a>', txt)
+        return txt
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            _close_lists()
+            continue
+
+        if re.match(r'^(---|___|\*\*\*)$', line):
+            _close_lists()
+            html_out.append('<div style="border-top: 1px solid #241f42; margin: 8px 0;"></div>')
+            continue
+
+        if line.startswith('#'):
+            _close_lists()
+            level = len(line.split()[0])
+            h_text = line.lstrip('#').strip()
+            h_text = _inline_format(h_text)
+            if level <= 2:
+                html_out.append(f'<div style="font-size: 12px; font-weight: bold; color: #a78bfa; margin-top: 8px; margin-bottom: 4px;">{h_text}</div>')
+            else:
+                html_out.append(f'<div style="font-size: 11px; font-weight: bold; color: #38bdf8; margin-top: 6px; margin-bottom: 3px;">{h_text}</div>')
+            continue
+
+        if line.startswith(('- ', '* ', '• ')):
+            if in_ol:
+                html_out.append('</ol>')
+                in_ol = False
+            if not in_ul:
+                html_out.append('<ul style="margin: 2px 0 4px 0; padding-left: 16px;">')
+                in_ul = True
+            item_text = line[2:].strip()
+            item_text = _inline_format(item_text)
+            html_out.append(f'<li style="margin-bottom: 4px; color: #cbd5e1; font-size: 11px; line-height: 140%;">{item_text}</li>')
+            continue
+
+        m_num = re.match(r'^(\d+)\.\s+(.*)$', line)
+        if m_num:
+            if in_ul:
+                html_out.append('</ul>')
+                in_ul = False
+            if not in_ol:
+                html_out.append('<ol style="margin: 2px 0 4px 0; padding-left: 18px;">')
+                in_ol = True
+            item_text = m_num.group(2).strip()
+            item_text = _inline_format(item_text)
+            html_out.append(f'<li style="margin-bottom: 4px; color: #cbd5e1; font-size: 11px; line-height: 140%;">{item_text}</li>')
+            continue
+
+        _close_lists()
+        p_text = _inline_format(line)
+        html_out.append(f'<p style="margin: 3px 0; color: #cbd5e1; font-size: 11px; line-height: 140%;">{p_text}</p>')
+
+    _close_lists()
+    return ''.join(html_out)
 
 
 class _UpdateCatalogDialog(QWidget):
@@ -31,9 +127,9 @@ class _UpdateCatalogDialog(QWidget):
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
-        _DIALOG_W = 440
-        _NOTES_MIN_H = 50
-        _NOTES_MAX_H = 220
+        _DIALOG_W = 460
+        _NOTES_MIN_H = 60
+        _NOTES_MAX_H = 250
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -73,29 +169,47 @@ class _UpdateCatalogDialog(QWidget):
         sep.setStyleSheet(f"background: {_BORD};")
         cl.addWidget(sep)
 
-        notes_lbl = QLabel("What's new")
-        notes_lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        notes_lbl.setStyleSheet(f"color: {_ACC2}; background: transparent;")
-        cl.addWidget(notes_lbl)
-
         notes_scroll = QScrollArea()
         notes_scroll.setWidgetResizable(True)
-        notes_scroll.setStyleSheet("background: transparent; border: none;")
+        notes_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        notes_scroll.setStyleSheet(f"""
+            QScrollArea {{
+                background: transparent;
+                border: none;
+            }}
+            QScrollBar:vertical {{
+                background: rgba(255, 255, 255, 0.03);
+                width: 5px;
+                border-radius: 2px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: rgba(255, 255, 255, 0.2);
+                min-height: 20px;
+                border-radius: 2px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {_ACC2};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
+        """)
         notes_inner = QWidget(); notes_inner.setStyleSheet("background: transparent;")
         nil = QVBoxLayout(notes_inner)
-        nil.setContentsMargins(2, 2, 2, 2); nil.setSpacing(6)
-        if notes:
-            for line in notes:
-                item = QLabel(f"•  {line}")
-                item.setFont(QFont("Segoe UI", 9))
-                item.setStyleSheet(f"color: {_FG}; background: transparent;")
-                item.setWordWrap(True)
-                nil.addWidget(item)
-        else:
-            item = QLabel("See the release page for full details.")
-            item.setFont(QFont("Segoe UI", 9))
-            item.setStyleSheet(f"color: {_MUTE}; background: transparent;")
-            nil.addWidget(item)
+        nil.setContentsMargins(2, 2, 2, 2); nil.setSpacing(0)
+
+        content_lbl = QLabel(notes_inner)
+        content_lbl.setTextFormat(Qt.TextFormat.RichText)
+        content_lbl.setText(_render_markdown_to_rich_html(notes))
+        content_lbl.setFont(QFont("Segoe UI", 9))
+        content_lbl.setStyleSheet(f"color: {_FG}; background: transparent;")
+        content_lbl.setWordWrap(True)
+        content_lbl.setOpenExternalLinks(True)
+        nil.addWidget(content_lbl)
         nil.addStretch()
         notes_scroll.setWidget(notes_inner)
         cl.addWidget(notes_scroll)
@@ -107,7 +221,11 @@ class _UpdateCatalogDialog(QWidget):
 
         btn_row = QHBoxLayout(); btn_row.setSpacing(8)
 
-        gh_btn = QPushButton("🌐  Visit Website")
+        gh_btn = QPushButton(" Visit Website")
+        gh_icon_path = asset_path("icon.png")
+        if gh_icon_path and os.path.exists(gh_icon_path):
+            gh_btn.setIcon(QIcon(gh_icon_path))
+            gh_btn.setIconSize(QSize(16, 16))
         gh_btn.setFixedHeight(36)
         gh_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         gh_btn.setFont(QFont("Segoe UI", 9))

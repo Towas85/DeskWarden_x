@@ -6,12 +6,13 @@ import os
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
-    QButtonGroup, QFileDialog,
+    QButtonGroup, QFileDialog, QLineEdit,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QCursor, QFileSystemModel
 
 from ...core.config import load_config, save_config
+from ...core.logging_utils import suppress_faulthandler
 
 from .theme import (
     _BG, _CARD, _CARD2, _BORD, _ACC, _ACC2, _ACC3, _FG, _MUTE, _RED, _glow,
@@ -36,7 +37,33 @@ class _AppsPanelMixin:
         hl = QLabel("PROTECTED APPS")
         hl.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         hl.setStyleSheet(f"color: #b794f6; background: transparent;")
-        hdr.addWidget(hl); hdr.addStretch()
+        hdr.addWidget(hl)
+        hdr.addSpacing(14)
+
+        self._search_input = QLineEdit()
+        self._search_input.setPlaceholderText("🔍 Search apps...")
+        self._search_input.setFixedWidth(160)
+        self._search_input.setFixedHeight(26)
+        self._search_input.setStyleSheet(f"""
+            QLineEdit {{
+                background: #0d0b1a;
+                color: {_FG};
+                border: 1px solid {_BORD};
+                border-radius: 6px;
+                padding: 1px 8px;
+                font-size: 8.5pt;
+                font-family: 'Segoe UI';
+            }}
+            QLineEdit:focus {{
+                border-color: {_ACC};
+                background: #140d28;
+            }}
+        """)
+        self._search_input.textChanged.connect(self._on_search_changed)
+        hdr.addWidget(self._search_input)
+
+        hdr.addStretch()
+
         self._count_badge = QLabel("0 app(s)")
         self._count_badge.setFont(QFont("Segoe UI", 8))
         self._count_badge.setStyleSheet(f"""
@@ -50,8 +77,22 @@ class _AppsPanelMixin:
         div.setStyleSheet(f"background: {_BORD};")
         cl.addWidget(div)
 
-        self._apps_container_lay = cl
-        self._apps_card = card
+        self._cards_container = QWidget()
+        self._cards_container.setStyleSheet("background: transparent;")
+        self._cards_lay = QVBoxLayout(self._cards_container)
+        self._cards_lay.setContentsMargins(0, 0, 0, 0)
+        self._cards_lay.setSpacing(12)
+        self._cards_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        cl.addWidget(self._cards_container)
+
+        self._no_results_lbl = QLabel("")
+        self._no_results_lbl.setFont(QFont("Segoe UI", 9))
+        self._no_results_lbl.setStyleSheet(f"color: {_MUTE}; background: transparent; padding: 14px 0;")
+        self._no_results_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._no_results_lbl.hide()
+        cl.addWidget(self._no_results_lbl)
+
+        self._app_cards = []
 
         add_btn = QPushButton("＋  Add App")
         add_btn.setFixedHeight(38)
@@ -70,33 +111,161 @@ class _AppsPanelMixin:
             }}""")
         _glow(add_btn, _ACC, 20)
         add_btn.clicked.connect(self._add_app)
+        cl.addWidget(add_btn)
 
         pl.addWidget(card)
-        cl.addWidget(add_btn)
 
         self._scroll_lay.addWidget(panel)
         self._section_widgets["apps"] = panel
         self._refresh_apps()
 
-    # ── Refresh ──────────────────────────────────────────────────────────
+    # ── Refresh & Search ─────────────────────────────────────────────────
+
+    def _on_search_changed(self, _text: str):
+        self._filter_apps()
+
+    def _filter_apps(self):
+        query = self._search_input.text().strip().lower() if hasattr(self, "_search_input") else ""
+        apps = self._cfg.get("locked_apps", []) if hasattr(self, "_cfg") else []
+        if not apps:
+            if hasattr(self, "_search_input"):
+                self._search_input.setEnabled(False)
+            if hasattr(self, "_no_results_lbl"):
+                self._no_results_lbl.hide()
+            return
+
+        if hasattr(self, "_search_input"):
+            self._search_input.setEnabled(True)
+        visible_count = 0
+        for item in getattr(self, "_app_cards", []):
+            card = item["card"]
+            match = (
+                not query or
+                query in item["exe"].lower() or
+                query in item["display_name"].lower() or
+                query in item["mode"].lower() or
+                query in item["desc"].lower()
+            )
+            card.setVisible(match)
+            if match:
+                visible_count += 1
+
+        if hasattr(self, "_no_results_lbl"):
+            if visible_count == 0 and query:
+                self._no_results_lbl.setText(f"No apps found matching \"{self._search_input.text().strip()}\"")
+                self._no_results_lbl.show()
+            else:
+                self._no_results_lbl.hide()
+
+        if hasattr(self, "_count_badge"):
+            if query:
+                self._count_badge.setText(f"{visible_count}/{len(apps)} app(s)")
+            else:
+                self._count_badge.setText(f"{len(apps)} app(s)")
 
     def _refresh_apps(self):
         self._cfg = load_config()
         apps = self._cfg.get("locked_apps", [])
         self._count_badge.setText(f"{len(apps)} app(s)")
-        while self._apps_container_lay.count() > 3:
-            item = self._apps_container_lay.takeAt(2)
+        self._app_cards = []
+
+        while self._cards_lay.count():
+            item = self._cards_lay.takeAt(0)
             if item and item.widget():
                 item.widget().deleteLater()
 
         if not apps:
-            empty = QLabel("No apps locked yet. Click '＋ Add App' below.")
-            empty.setFont(QFont("Segoe UI", 9))
-            empty.setStyleSheet(f"color: {_MUTE}; background: transparent; padding: 10px 0;")
-            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._apps_container_lay.insertWidget(
-                self._apps_container_lay.count() - 1, empty)
+            if hasattr(self, "_search_input"):
+                self._search_input.setEnabled(False)
+            empty_box = QWidget()
+            empty_box.setStyleSheet("background: transparent;")
+            el = QVBoxLayout(empty_box)
+            el.setContentsMargins(4, 10, 4, 14)
+            el.setSpacing(14)
+
+            title_box = QVBoxLayout()
+            title_box.setSpacing(4)
+            title = QLabel("How to Lock an Application")
+            title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+            title.setStyleSheet(f"color: {_FG}; background: transparent;")
+            title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            title_box.addWidget(title)
+
+            subtitle = QLabel("Choose any of the 2 easy methods below to add your apps:")
+            subtitle.setFont(QFont("Segoe UI", 8))
+            subtitle.setStyleSheet(f"color: {_MUTE}; background: transparent;")
+            subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            title_box.addWidget(subtitle)
+            el.addLayout(title_box)
+
+            # 2 Columns for Method 1 and Method 2
+            methods_row = QHBoxLayout()
+            methods_row.setSpacing(12)
+
+            # Method 1 Card
+            m1_card = _Card(bg="rgba(255, 255, 255, 0.02)", border=_BORD, radius=12)
+            m1_lay = QVBoxLayout(m1_card)
+            m1_lay.setContentsMargins(14, 12, 14, 12)
+            m1_lay.setSpacing(8)
+
+            m1_hdr = QLabel("Method 1: Direct Browse")
+            m1_hdr.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            m1_hdr.setStyleSheet("color: #a78bfa; background: transparent; border: none;")
+            m1_lay.addWidget(m1_hdr)
+
+            m1_txt = QLabel(
+                "<b>1.</b> Click <b>'＋ Add App'</b> button below.<br>"
+                "<b>2.</b> Browse and select any <b>.exe</b> file or Desktop shortcut (<b>.lnk</b>)."
+            )
+            m1_txt.setFont(QFont("Segoe UI", 8))
+            m1_txt.setWordWrap(True)
+            m1_txt.setStyleSheet(f"color: {_FG}; background: transparent; border: none; line-height: 145%;")
+            m1_lay.addWidget(m1_txt)
+            m1_lay.addStretch()
+            methods_row.addWidget(m1_card)
+
+            # Method 2 Card
+            m2_card = _Card(bg="rgba(255, 255, 255, 0.02)", border=_BORD, radius=12)
+            m2_lay = QVBoxLayout(m2_card)
+            m2_lay.setContentsMargins(14, 12, 14, 12)
+            m2_lay.setSpacing(8)
+
+            m2_hdr = QLabel("Method 2: Windows Search / Copy Path")
+            m2_hdr.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            m2_hdr.setStyleSheet("color: #38bdf8; background: transparent; border: none;")
+            m2_lay.addWidget(m2_hdr)
+
+            m2_txt = QLabel(
+                "<b>1.</b> Search app in Windows Start → Right-click → <b>'Open file location'</b>.<br>"
+                "<b>2.</b> Right-click the app/shortcut → Click <b>'Copy as path'</b>.<br>"
+                "<b>3.</b> Click <b>'＋ Add App'</b> below, paste (<b>Ctrl+V</b>) into File name, and click <b>Open</b>."
+            )
+            m2_txt.setFont(QFont("Segoe UI", 8))
+            m2_txt.setWordWrap(True)
+            m2_txt.setStyleSheet(f"color: {_FG}; background: transparent; border: none; line-height: 145%;")
+            m2_lay.addWidget(m2_txt)
+            m2_lay.addStretch()
+            methods_row.addWidget(m2_card)
+
+            el.addLayout(methods_row)
+
+            # Future update note
+            footer_note = QLabel(
+                "<i>We sincerely apologize for this temporary manual step. We are actively working on automatic 1-click app detection for the upcoming update so you won't need to find paths manually!</i>"
+            )
+            footer_note.setFont(QFont("Segoe UI", 8))
+            footer_note.setStyleSheet("color: #94a3b8; background: transparent; border: none;")
+            footer_note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            footer_note.setWordWrap(True)
+            el.addWidget(footer_note)
+
+            self._cards_lay.addWidget(empty_box)
+            if hasattr(self, "_no_results_lbl"):
+                self._no_results_lbl.hide()
             return
+
+        if hasattr(self, "_search_input"):
+            self._search_input.setEnabled(True)
 
         for i, app_item in enumerate(apps):
             exe  = app_item.get("exe", "") if isinstance(app_item, dict) else app_item
@@ -109,13 +278,15 @@ class _AppsPanelMixin:
             acl.setContentsMargins(16, 12, 12, 12); acl.setSpacing(8)
 
             top = QHBoxLayout(); top.setSpacing(12)
+            top.setAlignment(Qt.AlignmentFlag.AlignVCenter)
             app_path = app_item.get("path", "") if isinstance(app_item, dict) else ""
             pm = self._exe_icon_pixmap(app_path)
             icon = _AppIconBox(pm, mc[0], 40, mc[1], mc[2], 12)
-            top.addWidget(icon)
+            top.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
 
             info_l = QVBoxLayout(); info_l.setSpacing(2)
-            nl = QLabel(exe)
+            display_name = exe[:-4] if exe.lower().endswith(".exe") else exe
+            nl = QLabel(display_name)
             nl.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
             nl.setStyleSheet(f"color: {_FG}; background: transparent;")
             dl = QLabel(mc[5])
@@ -168,16 +339,37 @@ class _AppsPanelMixin:
                         self._set_mode(idx, mkey, desc))
             acl.addLayout(pills)
 
-            self._apps_container_lay.insertWidget(
-                self._apps_container_lay.count() - 1, ac)
+            self._app_cards.append({
+                "card": ac,
+                "exe": exe,
+                "display_name": display_name,
+                "mode": mode,
+                "desc": mc[5],
+            })
+
+            self._cards_lay.addWidget(ac)
+
+        self._filter_apps()
 
     # ── Actions ──────────────────────────────────────────────────────────
 
     def _add_app(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select .exe to lock", "",
-            "Executable (*.exe);;All files (*.*)")
+        with suppress_faulthandler():
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Select application to lock", "",
+                "Applications (*.exe *.lnk);;Executables (*.exe);;Shortcuts (*.lnk);;All files (*.*)")
         if path:
+            path = path.strip().strip('"').strip("'")
+            if path.lower().endswith(".lnk"):
+                try:
+                    import win32com.client
+                    shell = win32com.client.Dispatch("WScript.Shell")
+                    shortcut = shell.CreateShortCut(path)
+                    target = getattr(shortcut, "TargetPath", None) or getattr(shortcut, "Targetpath", "")
+                    if target and os.path.isfile(target) and target.lower().endswith(".exe"):
+                        path = target
+                except Exception:
+                    pass
             name = os.path.basename(path).lower()
             apps = self._cfg.get("locked_apps", [])
             existing = [(a.get("exe","") if isinstance(a, dict) else a)
@@ -188,7 +380,7 @@ class _AppsPanelMixin:
                 save_config(self._cfg)
                 self._refresh_apps()
 
-    def _exe_icon_pixmap(self, path, size=28):
+    def _exe_icon_pixmap(self, path, size=32):
         try:
             if path and os.path.isfile(path):
                 if not hasattr(self, "_fs_icon_model"):

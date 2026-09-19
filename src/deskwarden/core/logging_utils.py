@@ -10,6 +10,7 @@ import threading
 import traceback
 import faulthandler
 import datetime as _dt
+from contextlib import contextmanager
 
 from .paths import DIAGNOSTIC_LOG_PATH, CRASH_LOG_PATH, IS_FROZEN
 
@@ -18,10 +19,10 @@ from .paths import DIAGNOSTIC_LOG_PATH, CRASH_LOG_PATH, IS_FROZEN
 # ═════════════════════════════════════════════════════════════════════════
 
 _DIAG_LOCK       = threading.Lock()
-_DIAG_MAX_LINES  = 3000
-_DIAG_MAX_DAYS   = 7
-_CRASH_MAX_LINES = 500
-_CRASH_MAX_DAYS  = 30
+_DIAG_MAX_LINES  = 12000
+_DIAG_MAX_DAYS   = 14
+_CRASH_MAX_LINES = 2000
+_CRASH_MAX_DAYS  = 60
 _DATE_FMT        = "%Y-%m-%d %H:%M:%S"
 
 
@@ -51,7 +52,6 @@ def _env_banner() -> str:
 # ═════════════════════════════════════════════════════════════════════════
 
 def redirect_stdio_to_crash_log() -> None:
-    
     global _crash_file_handle
     try:
         crash_file = open(CRASH_LOG_PATH, "a", encoding="utf-8", buffering=1)
@@ -71,6 +71,31 @@ def redirect_stdio_to_crash_log() -> None:
         threading.excepthook = _thread_excepthook
     except Exception:
         pass
+
+
+@contextmanager
+def suppress_faulthandler():
+    """Temporarily disables faulthandler to prevent benign Windows Shell COM
+    first-chance exceptions (such as 0x8001010e RPC_E_WRONG_THREAD during QFileDialog)
+    from cluttering the crash log."""
+    was_enabled = False
+    try:
+        was_enabled = faulthandler.is_enabled()
+        if was_enabled:
+            faulthandler.disable()
+    except Exception:
+        pass
+    try:
+        yield
+    finally:
+        try:
+            if was_enabled:
+                if _crash_file_handle and not _crash_file_handle.closed:
+                    faulthandler.enable(file=_crash_file_handle, all_threads=True)
+                else:
+                    faulthandler.enable()
+        except Exception:
+            pass
 
 
 def _write_crash_block(header: str, exc_type, exc_value, exc_tb) -> None:
@@ -163,11 +188,11 @@ def _cleanup_by_age_and_size(path: str, max_days: int, max_lines: int) -> None:
                     if line_dt >= cutoff:
                         kept.append(raw_line)
                 except Exception:
-          
                     kept.append(raw_line)
 
         if len(kept) > max_lines:
-            kept = kept[-(max_lines // 2):]
+            retain_count = int(max_lines * 0.85)
+            kept = kept[-retain_count:]
 
         with open(path, "w", encoding="utf-8") as f:
             f.writelines(kept)

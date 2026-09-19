@@ -6,7 +6,7 @@ for /f "tokens=3" %%a in ('reg query "HKCU\Console" /v QuickEdit 2^>nul ^| finds
 reg add "HKCU\Console" /v QuickEdit /t REG_DWORD /d 0 /f >nul 2>&1
 
 :: ============================================================
-::  DeskWarden Installer v1.0
+::  DeskWarden Installer v1.2.0
 :: ============================================================
 
 set "HALT=0"
@@ -60,7 +60,7 @@ endlocal & exit /b %EXIT_CODE%
 cls
 echo.
 echo  ===========================================================
-echo   DeskWarden  ^|  Application Locker  ^|  v1.0 Installer
+echo   DeskWarden  ^|  Application Locker  ^|  v1.2.0 Installer
 echo  ===========================================================
 echo.
 echo   This installer will:
@@ -104,11 +104,13 @@ echo.
 
 :ask_reinstall
 set "REINSTALL="
-set /p "REINSTALL=  Update DeskWarden to the latest version? (y/n): "
+set /p "REINSTALL=  Update DeskWarden to the latest version? (y = Yes, n = No): "
 echo.
 
 if /i "!REINSTALL!"=="y" goto :reinstall_yes
+if /i "!REINSTALL!"=="yes" goto :reinstall_yes
 if /i "!REINSTALL!"=="n" goto :reinstall_no
+if /i "!REINSTALL!"=="no" goto :reinstall_no
 echo   Please enter y or n only.
 echo.
 goto :ask_reinstall
@@ -272,8 +274,11 @@ if not exist "!INSTALL_DIR!"        mkdir "!INSTALL_DIR!"
 if not exist "!INSTALL_DIR!\assets" mkdir "!INSTALL_DIR!\assets"
 if not exist "!INSTALL_DIR!\src"    mkdir "!INSTALL_DIR!\src"
 
+:: Clean stale __pycache__
+for /d /r "%~dp0src" %%d in (__pycache__) do @if exist "%%d" rd /s /q "%%d" >nul 2>&1
+for /d /r "!INSTALL_DIR!\src" %%d in (__pycache__) do @if exist "%%d" rd /s /q "%%d" >nul 2>&1
 
-robocopy "%~dp0src" "!INSTALL_DIR!\src" /E /PURGE /NFL /NDL /NJH /NJS /NC /NS /NP >nul
+robocopy "%~dp0src" "!INSTALL_DIR!\src" /E /PURGE /XD __pycache__ /NFL /NDL /NJH /NJS /NC /NS /NP >nul
 if !errorLevel! geq 8 (
     call :error "Failed to copy files to Program Files." "Check that no security software is blocking the installation."
     pause
@@ -284,10 +289,8 @@ if !errorLevel! geq 8 (
 
 robocopy "%~dp0assets" "!INSTALL_DIR!\assets" /E /PURGE /NFL /NDL /NJH /NJS /NC /NS /NP >nul
 
-:: Copy uninstaller
-if exist "%~dp0uninstall_deskwarden.bat" (
-    copy /y "%~dp0uninstall_deskwarden.bat" "!INSTALL_DIR!\uninstall.bat" >nul
-)
+:: Do not copy uninstaller to program directory
+if exist "!INSTALL_DIR!\uninstall.bat" del /f /q "!INSTALL_DIR!\uninstall.bat" >nul 2>&1
 
 :: Determine pythonw path (no CMD window on launch)
 set "LAUNCH_EXE=!PYTHON_EXE!"
@@ -355,9 +358,9 @@ goto :eof
 
 :step_verify_deps
 echo  Verifying installed packages...
-"!PYTHON_EXE!" -c "import psutil, win32api, win32gui, win32con, win32process; from PIL import Image; from PyQt6 import QtWidgets, QtCore, QtGui" >nul 2>&1
+"!PYTHON_EXE!" -c "import psutil, win32api, win32gui, win32con, win32process, cryptography; from PIL import Image; from PyQt6 import QtWidgets, QtCore, QtGui" >nul 2>&1
 if %errorLevel% neq 0 (
-    call :error "Package verification failed." "Run manually: !PYTHON_EXE! -m pip install psutil pywin32 pillow PyQt6 PyQt6-Qt6-Svg"
+    call :error "Package verification failed." "Run manually: !PYTHON_EXE! -m pip install psutil pywin32 pillow PyQt6 PyQt6-Qt6-Svg cryptography"
     pause
     set "HALT=1"
     set "HALT_CODE=1"

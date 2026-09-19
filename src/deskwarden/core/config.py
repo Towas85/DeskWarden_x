@@ -23,7 +23,9 @@ _config_cache = {"mtime": None, "data": None}
 # ═════════════════════════════════════════════════════════════════════════
 
 def _migrate_config(c: dict) -> dict:
-    default = {"password_hash": "", "locked_apps": [], "autostart": True,
+    default = {"password_hash": "", "recovery_key_hash": "", "recovery_email": "",
+               "recovery_key_enabled": True, "recovery_email_enabled": True,
+               "locked_apps": [], "autostart": True,
                "auto_update": True, "last_update_check": "",
                "update_skip_version": "", "update_skip_until": ""}
     for k, v in default.items():
@@ -43,13 +45,15 @@ def _migrate_config(c: dict) -> dict:
 def _deep_copy_config(c: dict) -> dict:
     return {
         "password_hash": c.get("password_hash", ""),
+        "recovery_key_hash": c.get("recovery_key_hash", ""),
+        "recovery_email": c.get("recovery_email", ""),
         "locked_apps": [dict(item) for item in c.get("locked_apps", [])],
         "autostart": c.get("autostart", True),
         "auto_update": c.get("auto_update", True),
         "last_update_check": c.get("last_update_check", ""),
         **{k: v for k, v in c.items() if k not in (
-            "password_hash", "locked_apps", "autostart",
-            "auto_update", "last_update_check")},
+            "password_hash", "recovery_key_hash", "recovery_email", "locked_apps",
+            "autostart", "auto_update", "last_update_check")},
     }
 
 
@@ -58,7 +62,9 @@ def _deep_copy_config(c: dict) -> dict:
 # ═════════════════════════════════════════════════════════════════════════
 
 def load_config():
-    default = {"password_hash": "", "locked_apps": [], "autostart": True,
+    default = {"password_hash": "", "recovery_key_hash": "", "recovery_email": "",
+               "recovery_key_enabled": True, "recovery_email_enabled": True,
+               "locked_apps": [], "autostart": True,
                "auto_update": True, "last_update_check": "",
                "update_skip_version": "", "update_skip_until": ""}
 

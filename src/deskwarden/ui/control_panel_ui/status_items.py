@@ -16,6 +16,7 @@ from .theme import _TEAL, _RED, _GREEN, _MUTE, _ACC2
 def _sidebar_status_items():
 
     items = []
+    _SKY_BLUE = "#38bdf8"
     try:
         proc = psutil.Process(os.getpid())
         cpu_pct = proc.cpu_percent(interval=None)
@@ -25,17 +26,53 @@ def _sidebar_status_items():
         pass
     try:
         entries = load_security_log()
-        lbl_map = {"wrong_password": "Wrong password", "lockout_start": "Locked out",
-                   "lockout_end": "Lockout ended", "success": "Unlocked"}
-        color_map = {"wrong_password": "#f59e0b", "lockout_start": _RED,
-                     "lockout_end": _GREEN, "success": _GREEN}
+        lbl_map = {
+            "wrong_password":           "Wrong password",
+            "lockout_start":            "Locked out",
+            "lockout_end":              "Lockout ended",
+            "success":                  "Unlocked",
+            "password_changed":         "Password changed",
+            "password_reset":           "Password reset",
+            "otp_sent":                 "OTP sent",
+            "otp_verified":             "OTP verified",
+            "wrong_otp":                "Invalid OTP",
+            "recovery_key_verified":    "Recovery key verified",
+            "wrong_recovery_key":       "Invalid recovery key",
+            "recovery_key_regenerated": "Recovery key renewed",
+            "recovery_email_updated":   "Recovery email updated",
+            "recovery_key_toggled":     "Recovery key updated",
+            "recovery_email_toggled":   "Recovery email updated",
+            "backup_exported":          "Backup exported",
+            "backup_imported":          "Backup imported",
+        }
+        color_map = {
+            "wrong_password":           "#f59e0b",
+            "lockout_start":            _RED,
+            "lockout_end":              _GREEN,
+            "success":                  _GREEN,
+            "otp_verified":             _GREEN,
+            "recovery_key_verified":    _GREEN,
+            "wrong_otp":                "#f59e0b",
+            "wrong_recovery_key":       "#f59e0b",
+            "otp_sent":                 _SKY_BLUE,
+            "password_changed":         _SKY_BLUE,
+            "password_reset":           _SKY_BLUE,
+            "recovery_key_regenerated": _SKY_BLUE,
+            "recovery_email_updated":   _SKY_BLUE,
+            "recovery_key_toggled":     _SKY_BLUE,
+            "recovery_email_toggled":   _SKY_BLUE,
+            "backup_exported":          _SKY_BLUE,
+            "backup_imported":          _SKY_BLUE,
+        }
 
-        _SKIP_WHERE = {"Control Panel", "Quit"}
         last = None
         for e in reversed(entries):
-            if e.get("where") not in _SKIP_WHERE:
-                last = e
-                break
+            if e.get("where") == "Quit":
+                continue
+            if e.get("where") == "Control Panel" and e.get("type") == "success":
+                continue
+            last = e
+            break
         if last:
             et = last.get("type", "")
             where = last.get("where", "")
@@ -43,8 +80,9 @@ def _sidebar_status_items():
                 where = where[4:]
             if where.lower().endswith(".exe"):
                 where = where[:-4]
-            txt = f"Last: {lbl_map.get(et, et or '—')} — {where}"
-            items.append((txt[:46], color_map.get(et, _MUTE)))
+            event_name = lbl_map.get(et, et.replace("_", " ").title() if et else "—")
+            txt = f"Last: {event_name} — {where}" if where else f"Last: {event_name}"
+            items.append((txt[:46], color_map.get(et, _SKY_BLUE)))
         else:
             items.append(("No security events yet", _MUTE))
     except Exception:

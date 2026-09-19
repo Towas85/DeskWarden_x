@@ -25,7 +25,7 @@ class _DiagnosticsPanelMixin:
     # ── Diagnostic Log: build ────────────────────────────────────────────
 
     def _build_diag_log_panel(self):
-        panel = QWidget(); panel.setStyleSheet(f"background: {_BG};")
+        panel = QWidget(); panel.setStyleSheet(f"background: {_BG};"); panel.hide()
         pl = QVBoxLayout(panel)
         pl.setContentsMargins(0, 0, 0, 0); pl.setSpacing(12)
 

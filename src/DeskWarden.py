@@ -76,7 +76,6 @@ if __name__ == "__main__":
 
     # ── Control Panel UI  ───────────────────
     if "--control-panel" in sys.argv:
-     
         from deskwarden.ui.control_panel_ui import run_control_panel_mode
         run_control_panel_mode()
         sys.exit(0)

@@ -10,7 +10,10 @@ import threading
 
 from .core.logging_utils import dlog, log_crash
 from .core.config import load_config
-from .core.updater import CURRENT_VERSION, check_for_update_auto_async
+from .core.updater import (
+    CURRENT_VERSION, check_for_update_auto_async,
+    get_cached_update_snapshot, is_version_skipped,
+)
 from .core.security import UNLOCK_GRACE_SECONDS
 from .core.process_utils import (
     suspend_process, resume_process, hide_process_windows,
@@ -280,9 +283,21 @@ def main():
         try:
             if res.get("update_available"):
                 tray.set_badge(True)
-                tray.show_update_toast(res.get("latest", "?"))
+                latest = res.get("latest", "?")
+                if not is_version_skipped(latest):
+                    tray.show_update_toast(latest)
         except Exception as e:
             log_crash("_on_startup_update_result", e)
+
+    try:
+        cached_snap = get_cached_update_snapshot()
+        if cached_snap.get("update_available"):
+            tray.set_badge(True)
+            latest_c = cached_snap.get("latest", "?")
+            if not is_version_skipped(latest_c):
+                tray.show_update_toast(latest_c)
+    except Exception as e:
+        pass
 
     try:
         _cfg_upd = load_config()

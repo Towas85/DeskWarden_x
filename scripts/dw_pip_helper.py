@@ -14,7 +14,7 @@ python_exe = sys.executable.replace("pythonw.exe", "python.exe")
 if not os.path.exists(python_exe):
     python_exe = sys.executable
 
-PACKAGES = ["psutil", "pywin32", "pillow", "PyQt6", "windows-toasts"]
+PACKAGES = ["psutil", "pywin32", "pillow", "PyQt6", "windows-toasts", "cryptography"]
 BAR = 34
 
 # ── colour helpers ───────────────────────────────────────────

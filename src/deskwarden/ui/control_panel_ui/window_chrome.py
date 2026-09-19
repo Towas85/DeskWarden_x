@@ -3,21 +3,81 @@ DeskWarden - ui/control_panel_ui/window_chrome.py
 """
 
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QCursor
+from PyQt6.QtCore import Qt, QTimer, QEvent
+from PyQt6.QtGui import QCursor, QPainterPath, QRegion, QBitmap, QPainter, QBrush
 
 from ...core.updater import check_for_update_auto_async, get_cached_update_snapshot
+from ...core.logging_utils import dlog
 
 from .theme import _BG, _CARD2, _BORD, _ACC, _FG
+
+# 5 minutes of user inactivity (idle timeout)
+IDLE_TIMEOUT_MS = 5 * 60 * 1000
 
 
 class _WindowChromeMixin:
 
+    # ── Idle timeout (auto-close after 5 min of inactivity) ─────────────
+
+    def _setup_idle_timer(self):
+        if not hasattr(self, "_idle_timer"):
+            self._idle_timer = QTimer(self)
+            self._idle_timer.setSingleShot(True)
+            self._idle_timer.timeout.connect(self._on_idle_timeout)
+            try:
+                from PyQt6.QtWidgets import QApplication
+                app = QApplication.instance()
+                if app:
+                    app.installEventFilter(self)
+            except Exception:
+                pass
+        self._reset_idle_timer()
+
+    def _reset_idle_timer(self):
+        timer = getattr(self, "_idle_timer", None)
+        if timer is not None:
+            timer.start(IDLE_TIMEOUT_MS)
+
+    def _on_idle_timeout(self):
+        try:
+            dlog("INFO", "ControlPanel: auto-closing due to 5 minutes of inactivity (idle timeout)")
+        except Exception:
+            pass
+        self.close()
+
+    def eventFilter(self, obj, ev):
+        try:
+            if ev.type() in (
+                QEvent.Type.MouseButtonPress,
+                QEvent.Type.MouseButtonRelease,
+                QEvent.Type.MouseMove,
+                QEvent.Type.KeyPress,
+                QEvent.Type.KeyRelease,
+                QEvent.Type.Wheel,
+                QEvent.Type.TouchBegin,
+                QEvent.Type.TouchUpdate,
+            ):
+                self._reset_idle_timer()
+        except Exception:
+            pass
+        return super().eventFilter(obj, ev)
+
     # ── Qt events ────────────────────────────────────────────────────────
 
     def closeEvent(self, ev):
-
         ev.accept()
+        try:
+            if getattr(self, "_idle_timer", None):
+                self._idle_timer.stop()
+        except Exception:
+            pass
+        try:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app:
+                app.removeEventFilter(self)
+        except Exception:
+            pass
         try:
             if getattr(self, "_status_rotator", None):
                 self._status_rotator.stop()
@@ -35,11 +95,15 @@ class _WindowChromeMixin:
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._setup_idle_timer()
+        self._update_window_mask()
         self._update_handles()
         self.repaint()
         self._refresh_settings_badge()
         _cached = get_cached_update_snapshot()
         if _cached.get("checked") and _cached.get("latest"):
+            self._update_result_pending = _cached
+            self._apply_update_result()
             from PyQt6.QtCore import QTimer as _QT2
             _QT2.singleShot(0, lambda: self._maybe_show_catalog(_cached))
 
@@ -55,11 +119,30 @@ class _WindowChromeMixin:
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._update_window_mask()
         self._update_handles()
 
         ov = getattr(self, "_switch_overlay", None)
         if ov is not None:
             ov.setGeometry(self._content.rect())
+
+    def _update_window_mask(self, radius=14.0):
+        try:
+            w = self.width()
+            h = self.height()
+            if w <= 0 or h <= 0:
+                return
+            path = QPainterPath()
+            path.addRoundedRect(0.0, 0.0, float(w), float(h), float(radius), float(radius))
+            mask = QBitmap(self.size())
+            mask.fill(Qt.GlobalColor.color0)
+            p = QPainter(mask)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.fillPath(path, QBrush(Qt.GlobalColor.color1))
+            p.end()
+            self.setMask(QRegion(mask))
+        except Exception:
+            pass
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

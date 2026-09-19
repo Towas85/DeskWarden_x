@@ -178,6 +178,7 @@ class LockScreen:
             _block_key(modal)
 
             _alive = [True]
+            _in_recovery = [False]
             _loop_ref = [None]
             _focus_conn = None
             _geom_conn = None
@@ -204,6 +205,15 @@ class LockScreen:
                         pass
                 result["ok"] = ok
                 _alive[0] = False
+
+                try:
+                    from .recovery_dialog import close_active_recovery_dialog
+                    if ok:
+                        close_active_recovery_dialog()
+                    else:
+                        close_active_recovery_dialog(source_context="lock_screen")
+                except Exception:
+                    pass
 
                 try:
                     _top_timer.stop()
@@ -455,7 +465,12 @@ class LockScreen:
                     strength_bar.setFixedWidth(strength_w.width())
                     strength_bar.setStyleSheet(f"background: {_GREEN}; border-radius: 2px;")
 
-            pw_edit.textChanged.connect(_update_strength)
+            def _on_txt_changed(txt):
+                _update_strength(txt)
+                if err_lbl.text() == "Please enter your password.":
+                    err_lbl.setText("")
+
+            pw_edit.textChanged.connect(_on_txt_changed)
 
             # Error label
             err_lbl = QLabel("")
@@ -485,15 +500,77 @@ class LockScreen:
                 QPushButton:disabled {{
                     background: {_CARD2}; color: {_MUTE};
                 }}""")
+            unlock_btn.setAutoDefault(False)
+            unlock_btn.setDefault(False)
             _glow(unlock_btn, QColor(124, 58, 237, 140), 18)
             right_l.addWidget(unlock_btn)
 
-            # Hint
+            # Hint and Forgot Password row
+            hint_row = QWidget()
+            hint_row.setStyleSheet("background: transparent;")
+            hrl = QHBoxLayout(hint_row)
+            hrl.setContentsMargins(4, 0, 4, 0)
+
             hint_lbl = QLabel("Press Enter ↵")
             hint_lbl.setFont(QFont("Segoe UI", 7))
             hint_lbl.setStyleSheet(f"color: {_MUTE}; background: transparent;")
-            hint_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            right_l.addWidget(hint_lbl)
+
+            forgot_btn = QPushButton("Forgot password?")
+            forgot_btn.setFont(QFont("Segoe UI", 8))
+            forgot_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            forgot_btn.setAutoDefault(False)
+            forgot_btn.setDefault(False)
+            forgot_btn.setStyleSheet(f"""
+                QPushButton {{ background: transparent; color: {_MUTE}; border: none; }}
+                QPushButton:hover {{ color: {_ACC2}; text-decoration: none; }}
+            """)
+            def _open_recovery():
+                try:
+                    from .recovery_dialog import show_recovery_modal
+                    def _on_rec_success():
+                        _finish(True)
+                    def _on_rec_close():
+                        _in_recovery[0] = False
+                        if _alive[0]:
+                            overlay.raise_()
+                            modal.raise_()
+                            modal.activateWindow()
+                            pw_edit.setFocus()
+                    rec = show_recovery_modal(on_success=_on_rec_success, on_close=_on_rec_close, source_context="lock_screen", parent=None)
+                    if rec:
+                        _in_recovery[0] = True
+                    else:
+                        _in_recovery[0] = False
+                        overlay.raise_()
+                        modal.raise_()
+                        modal.activateWindow()
+                        pw_edit.setFocus()
+                except Exception:
+                    _in_recovery[0] = False
+                    overlay.raise_()
+                    modal.raise_()
+                    modal.activateWindow()
+            forgot_btn.clicked.connect(_open_recovery)
+
+            rec_avail = False
+            try:
+                from .recovery_dialog import is_recovery_available
+                from ..core.config import load_config
+                rec_avail = is_recovery_available(load_config())
+            except Exception:
+                rec_avail = False
+
+            if rec_avail:
+                hrl.addWidget(hint_lbl)
+                hrl.addStretch()
+                hrl.addWidget(forgot_btn)
+            else:
+                forgot_btn.setVisible(False)
+                hrl.addStretch()
+                hrl.addWidget(hint_lbl)
+                hrl.addStretch()
+
+            right_l.addWidget(hint_row)
 
             # Status
             stat_w = QWidget(); stat_w.setStyleSheet("background: transparent;")
@@ -535,28 +612,10 @@ class LockScreen:
 
             QTimer.singleShot(30, _fade_in)
 
-            _drag = [False, 0, 0]
-            def _tb_press(ev):
-                if ev.button() == Qt.MouseButton.LeftButton:
-                    _drag[0] = True
-                    _drag[1] = ev.globalPosition().x() - modal.x()
-                    _drag[2] = ev.globalPosition().y() - modal.y()
-            def _tb_move(ev):
-                if _drag[0]:
-                    modal.move(
-                        int(ev.globalPosition().x() - _drag[1]),
-                        int(ev.globalPosition().y() - _drag[2])
-                    )
-            def _tb_release(ev):
-                _drag[0] = False
-            card.mousePressEvent   = _tb_press
-            card.mouseMoveEvent    = _tb_move
-            card.mouseReleaseEvent = _tb_release
-
             _raising = [False]
 
             def _raise_zorder():
-                if not _alive[0] or _raising[0]:
+                if not _alive[0] or _raising[0] or _in_recovery[0]:
                     return
                 _raising[0] = True
                 try:
@@ -570,6 +629,34 @@ class LockScreen:
             _top_timer = QTimer()
             _top_timer.timeout.connect(_raise_zorder)
             _top_timer.start(300)
+
+            def _overlay_mouse_press(ev):
+                if _in_recovery[0]:
+                    try:
+                        modal.raise_()
+                        from .recovery_dialog import RecoveryDialog
+                        rec_inst = getattr(RecoveryDialog, "_current_active_instance", None)
+                        if rec_inst is not None and rec_inst.isVisible() and getattr(rec_inst, "_source_context", None) == "lock_screen":
+                            rec_inst.raise_()
+                    except Exception:
+                        pass
+                else:
+                    _raise_zorder()
+            overlay.mousePressEvent = _overlay_mouse_press
+
+            def _card_mouse_press(ev):
+                if _in_recovery[0]:
+                    try:
+                        modal.raise_()
+                        from .recovery_dialog import RecoveryDialog
+                        rec_inst = getattr(RecoveryDialog, "_current_active_instance", None)
+                        if rec_inst is not None and rec_inst.isVisible() and getattr(rec_inst, "_source_context", None) == "lock_screen":
+                            rec_inst.raise_()
+                    except Exception:
+                        pass
+                else:
+                    _raise_zorder()
+            card.mousePressEvent = _card_mouse_press
 
             try:
                 _focus_conn = _qapp.focusWindowChanged.connect(lambda *_: _raise_zorder())
@@ -599,28 +686,52 @@ class LockScreen:
                     QTimer.singleShot(1000, _tick)
                 _tick()
 
+            _attempting = [False]
+
             def attempt():
-                is_locked, wait_s = check_locked_out(ctx_key)
-                if is_locked:
-                    _start_countdown(wait_s)
+                if _attempting[0]:
                     return
-                if hash_pw(pw_edit.text()) == password_hash:
-                    reset_attempt_state(ctx_key)
-                    log_security_event("success", ctx_key, "unlocked")
-                    _top_timer.stop()
-                    _finish(True)
-                else:
-                    state = record_wrong_attempt(ctx_key)
-                    pw_edit.clear()
-                    if state["locked"]:
-                        _start_countdown(state["wait"])
+                _attempting[0] = True
+                try:
+                    entered_txt = pw_edit.text()
+                    if not entered_txt:
+                        err_lbl.setText("Please enter your password.")
+                        pw_edit.setFocus()
+                        return
+                    is_locked, wait_s = check_locked_out(ctx_key)
+                    if is_locked:
+                        _start_countdown(wait_s)
+                        return
+                    try:
+                        from ..core.config import load_config
+                        current_pw_hash = load_config().get("password_hash", password_hash)
+                    except Exception:
+                        current_pw_hash = password_hash
+
+                    if hash_pw(entered_txt) == current_pw_hash:
+                        reset_attempt_state(ctx_key)
+                        log_security_event("success", ctx_key, "unlocked")
+                        _top_timer.stop()
+                        try:
+                            from .recovery_dialog import close_active_recovery_dialog
+                            close_active_recovery_dialog()
+                        except Exception:
+                            pass
+                        _finish(True)
                     else:
-                        rem = PENALTY_THRES - state["count"]
-                        if rem > 0:
-                            err_lbl.setText(f"Wrong password. {rem} attempt(s) remaining.")
+                        state = record_wrong_attempt(ctx_key)
+                        pw_edit.clear()
+                        if state["locked"]:
+                            _start_countdown(state["wait"])
                         else:
-                            err_lbl.setText("Wrong password.")
-                    pw_edit.setFocus()
+                            rem = PENALTY_THRES - state["count"]
+                            if rem > 0:
+                                err_lbl.setText(f"Wrong password. {rem} attempt(s) remaining.")
+                            else:
+                                err_lbl.setText("Wrong password.")
+                        pw_edit.setFocus()
+                finally:
+                    _attempting[0] = False
 
             unlock_btn.clicked.connect(attempt)
             pw_edit.returnPressed.connect(attempt)

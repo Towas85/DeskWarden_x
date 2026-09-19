@@ -37,7 +37,7 @@ class ControlPanelWindow:
                 dlog("INFO", f"ControlPanel.open: spawning subprocess: {' '.join(args)}")
                 self._proc = subprocess.Popen(
                     args,
-                    creationflags=0x00000008
+                    creationflags=0x00000008,
                 )
                 dlog("INFO", f"ControlPanel.open: subprocess spawned (PID {self._proc.pid}), waiting...")
                 rc = self._proc.wait()

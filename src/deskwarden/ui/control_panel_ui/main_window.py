@@ -18,7 +18,7 @@ from .theme import _ACC, _TEAL, _RED, _BG
 from .window_chrome import _WindowChromeMixin
 from .nav_shell import _NavShellMixin
 from .apps_panel import _AppsPanelMixin
-from .password_panel import _PasswordPanelMixin
+from .security_panel import _SecurityPanelMixin
 from .security_log_panel import _SecurityLogPanelMixin
 from .settings_panel import _SettingsPanelMixin
 from .diagnostics_panel import _DiagnosticsPanelMixin
@@ -30,7 +30,7 @@ class _ControlPanelWin(
     _WindowChromeMixin,
     _NavShellMixin,
     _AppsPanelMixin,
-    _PasswordPanelMixin,
+    _SecurityPanelMixin,
     _SecurityLogPanelMixin,
     _SettingsPanelMixin,
     _DiagnosticsPanelMixin,
@@ -66,3 +66,11 @@ class _ControlPanelWin(
         self._drag_pos = None
         self._build()
         self._apply_style()
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        try:
+            from ..recovery_dialog import close_active_recovery_dialog
+            close_active_recovery_dialog()
+        except Exception:
+            pass

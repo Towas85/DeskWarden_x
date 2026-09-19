@@ -151,7 +151,7 @@ class _NavShellMixin:
             " background: transparent;"
         )
         _glow(anl, QColor(200, 180, 255, 80), 16)
-        avl = QLabel("v1.1.0  ·  Windows")
+        avl = QLabel("v1.2.0  ·  Windows")
         avl.setFont(QFont("Segoe UI", 8))
         avl.setStyleSheet(f"color: #7c6da8; background: transparent; letter-spacing: 0.3px;")
         btl.addWidget(anl); btl.addWidget(avl)
@@ -207,7 +207,7 @@ class _NavShellMixin:
         self._nav_btns = {}
         nav_items = [
             ("🛡️", "Locked Apps",    "apps"),
-            ("🔑", "Password",       "password"),
+            ("🔐", "Security",       "security"),
             ("📋", "Security Log",   "log"),
             ("⚙️", "Settings",       "settings_cfg"),
         ]
@@ -346,7 +346,7 @@ class _NavShellMixin:
         rl.addWidget(body, 1)
 
         self._build_apps_panel()
-        self._build_password_panel()
+        self._build_security_panel()
         self._build_log_panel()
         self._build_cp_panel()
         self._build_diag_log_panel()
@@ -357,9 +357,11 @@ class _NavShellMixin:
     # ── Page switching ───────────────────────────────────────────────────
 
     def _switch(self, key):
+        if key == "password":
+            key = "security"
         titles = {
             "apps":         ("Locked Apps",  "Apps that require password on launch"),
-            "password":     ("Password",     "Set or change your master password"),
+            "security":     ("Security",     "Set master password and manage recovery options"),
             "log":          ("Security Log", "Recent authentication events"),
             "settings_cfg": ("Settings",     "Startup and general preferences"),
             "diag_log":     ("Diagnostic Log", "Real-time event log for troubleshooting"),
@@ -372,6 +374,9 @@ class _NavShellMixin:
             if key == "log":       self._refresh_log()
             if key == "diag_log":  self._refresh_diag_log()
             if key == "crash_log": self._refresh_crash_log()
+            if key == "settings_cfg":
+                if hasattr(self, "_refresh_settings_panel"):
+                    self._refresh_settings_panel()
             return
 
         self._active_section = key
@@ -417,7 +422,16 @@ class _NavShellMixin:
             if key == "log":       self._refresh_log()
             if key == "diag_log":  self._refresh_diag_log()
             if key == "crash_log": self._refresh_crash_log()
-            if key != "password":  self._reset_pw_form()
+            if hasattr(self, "_reset_all_security_forms"):
+                self._reset_all_security_forms()
+            else:
+                self._reset_pw_form()
+            if key in ("security", "password"):
+                if hasattr(self, "_refresh_security_panel"):
+                    self._refresh_security_panel()
+            if key == "settings_cfg":
+                if hasattr(self, "_refresh_settings_panel"):
+                    self._refresh_settings_panel()
             # overlay fade-out (reveal new content)
             anim_in = QPropertyAnimation(overlay_fx, b"opacity", overlay)
             anim_in.setDuration(160)

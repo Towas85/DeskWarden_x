@@ -405,24 +405,6 @@ class BlockNotice:
 
             QTimer.singleShot(30, _fade_in)
 
-            _drag = [False, 0, 0]
-            def _tb_press(ev):
-                if ev.button() == Qt.MouseButton.LeftButton:
-                    _drag[0] = True
-                    _drag[1] = ev.globalPosition().x() - modal.x()
-                    _drag[2] = ev.globalPosition().y() - modal.y()
-            def _tb_move(ev):
-                if _drag[0]:
-                    modal.move(
-                        int(ev.globalPosition().x() - _drag[1]),
-                        int(ev.globalPosition().y() - _drag[2])
-                    )
-            def _tb_release(ev):
-                _drag[0] = False
-            card.mousePressEvent   = _tb_press
-            card.mouseMoveEvent    = _tb_move
-            card.mouseReleaseEvent = _tb_release
-
             _raising = [False]
 
             def _raise_zorder():

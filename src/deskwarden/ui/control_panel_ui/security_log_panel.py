@@ -20,7 +20,7 @@ class _SecurityLogPanelMixin:
     # ── Build ────────────────────────────────────────────────────────────
 
     def _build_log_panel(self):
-        panel = QWidget(); panel.setStyleSheet(f"background: {_BG};")
+        panel = QWidget(); panel.setStyleSheet(f"background: {_BG};"); panel.hide()
         pl = QVBoxLayout(panel)
         pl.setContentsMargins(0, 0, 0, 0); pl.setSpacing(0)
 
@@ -88,16 +88,42 @@ class _SecurityLogPanelMixin:
         entries = load_security_log()
         recent = list(reversed(entries))[:30]
         EVENT_ICON = {
-            "wrong_password": ("⚠", "#f59e0b"),
-            "lockout_start":  ("🔒", _RED),
-            "lockout_end":    ("🔓", _GREEN),
-            "success":        ("✅", _GREEN),
+            "wrong_password":           ("⚠", "#f59e0b"),
+            "lockout_start":            ("🔒", _RED),
+            "lockout_end":              ("🔓", _GREEN),
+            "success":                  ("✅", _GREEN),
+            "password_changed":         ("🔑", "#a855f7"),
+            "password_reset":           ("🔄", _GREEN),
+            "otp_sent":                 ("📧", "#38bdf8"),
+            "otp_verified":             ("✓", _GREEN),
+            "wrong_otp":                ("⚠", "#f59e0b"),
+            "recovery_key_verified":    ("✓", _GREEN),
+            "wrong_recovery_key":       ("⚠", "#f59e0b"),
+            "recovery_key_regenerated": ("🔑", "#a855f7"),
+            "recovery_email_updated":   ("✉️", "#38bdf8"),
+            "recovery_key_toggled":     ("🛡️", "#9d5cff"),
+            "recovery_email_toggled":   ("🛡️", "#9d5cff"),
+            "backup_exported":          ("📦", "#38bdf8"),
+            "backup_imported":          ("📥", _GREEN),
         }
         type_map = {
-            "wrong_password": "Wrong Password",
-            "lockout_start":  "Locked Out",
-            "lockout_end":    "Lockout Ended",
-            "success":        "Unlocked",
+            "wrong_password":           "Wrong Password",
+            "lockout_start":            "Locked Out",
+            "lockout_end":              "Lockout Ended",
+            "success":                  "Unlocked",
+            "password_changed":         "Password Changed",
+            "password_reset":           "Password Reset (Recovery)",
+            "otp_sent":                 "Recovery OTP Sent",
+            "otp_verified":             "Email OTP Verified",
+            "wrong_otp":                "Invalid OTP Code",
+            "recovery_key_verified":    "Recovery Key Verified",
+            "wrong_recovery_key":       "Invalid Recovery Key",
+            "recovery_key_regenerated": "New Recovery Key Generated",
+            "recovery_email_updated":   "Recovery Email Updated",
+            "recovery_key_toggled":     "Recovery Key Toggled",
+            "recovery_email_toggled":   "Recovery Email Toggled",
+            "backup_exported":          "Backup Exported",
+            "backup_imported":          "Backup Imported",
         }
         if not recent:
             el = QLabel("No security events recorded yet.")

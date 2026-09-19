@@ -16,6 +16,7 @@ from ..core.logging_utils import dlog, log_crash
 _ui_queue: queue.Queue = queue.Queue()
 _qapp = None
 _ui_ready_event = threading.Event()
+_dispatcher = None
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -23,7 +24,7 @@ _ui_ready_event = threading.Event()
 # ═════════════════════════════════════════════════════════════════════════
 
 def _ui_thread_loop():
-    global _qapp, _ui_ready_event
+    global _qapp, _ui_ready_event, _dispatcher
 
     if threading.current_thread() is threading.main_thread():
         dlog("WARNING",
@@ -41,7 +42,7 @@ def _ui_thread_loop():
              "from this thread.")
 
     from PyQt6.QtWidgets import QApplication
-    from PyQt6.QtCore import QTimer
+    from PyQt6.QtCore import QTimer, QObject, pyqtSignal
 
     try:
         _qapp = QApplication.instance() or QApplication(sys.argv)
@@ -50,6 +51,21 @@ def _ui_thread_loop():
         log_crash("_ui_thread_loop: QApplication() failed", e)
         raise
     _qapp.setQuitOnLastWindowClosed(False)
+
+    class _Dispatcher(QObject):
+        task_signal = pyqtSignal(object)
+
+        def __init__(self):
+            super().__init__()
+            self.task_signal.connect(self._handle_task)
+
+        def _handle_task(self, fn):
+            try:
+                fn()
+            except Exception as _e:
+                log_crash("_handle_task fn()", _e)
+
+    _dispatcher = _Dispatcher()
 
     timer = QTimer()
 
@@ -78,7 +94,11 @@ def _ui_thread_loop():
 # ═════════════════════════════════════════════════════════════════════════
 
 def _run_on_ui_thread(fn):
-    _ui_queue.put(fn)
+    disp = _dispatcher
+    if disp is not None:
+        disp.task_signal.emit(fn)
+    else:
+        _ui_queue.put(fn)
 
 
 def _run_on_ui_thread_sync(fn):
